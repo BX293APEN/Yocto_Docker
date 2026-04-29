@@ -68,7 +68,7 @@ RUN apt-get update && \
     useradd -m -s /bin/bash -G sudo yocto && \
     echo "yocto ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers && \
     # ワークスペース作成
-    /${ENTRY_DIR} && \
+    mkdir -p /${ENTRY_DIR} && \
     chown -R yocto:yocto /${WS} /${ENTRY_DIR}
 
 ENV LANG=en_US.UTF-8
