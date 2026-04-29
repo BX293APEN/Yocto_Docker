@@ -251,27 +251,41 @@ SSHEOF
     fi
 
     # rootパスワード設定
-    # ヒアドキュメントを '' クォートで展開抑止し、ROOT_PASSWORD だけ sed で差し込む
-    cat >> "${LOCAL_CONF}" << 'ROOTPWEOF'
+    # BitBake の conf パーサーはシェル関数構文を解釈できないため、
+    # 関数定義は .bbclass に分離し、local.conf からは inherit + 変数代入のみ行う。
+    BBCLASS_DIR="${BUILD_DIR}/conf"
+    CUSTOM_BBCLASS="${BBCLASS_DIR}/yocto-docker-custom.bbclass"
 
-# root パスワード設定
-ROOTFS_POSTPROCESS_COMMAND:append = " set_root_password;"
+    # bbclass の書き出し (ヒアドキュメントは '' で変数展開を抑止し、
+    # プレースホルダーを後で sed 置換する)
+    cat > "${CUSTOM_BBCLASS}" << 'BBCLASSEOF'
+# yocto-docker-custom.bbclass
+# Docker ビルド時に生成される自動カスタマイズクラス
+
 set_root_password () {
     echo "root:__ROOT_PASSWORD__" | chpasswd -R ${IMAGE_ROOTFS} 2>/dev/null || \
         sed -i "s|^root:[^:]*:|root:$(openssl passwd -6 '__ROOT_PASSWORD__'):|" \
             ${IMAGE_ROOTFS}/etc/shadow || true
 }
-ROOTPWEOF
-    sed -i "s|__ROOT_PASSWORD__|${ROOT_PASSWORD}|g" "${LOCAL_CONF}"
+
+ROOTFS_POSTPROCESS_COMMAND:append = " set_root_password;"
+BBCLASSEOF
+    sed -i "s|__ROOT_PASSWORD__|${ROOT_PASSWORD}|g" "${CUSTOM_BBCLASS}"
+
+    # local.conf から bbclass を読み込む (変数代入のみ → パーサーセーフ)
+    if ! grep -q "yocto-docker-custom" "${LOCAL_CONF}"; then
+        echo "" >> "${LOCAL_CONF}"
+        echo "# カスタマイズクラス (rootパスワード / ネットワーク設定)" >> "${LOCAL_CONF}"
+        echo "INHERIT += \"yocto-docker-custom\"" >> "${LOCAL_CONF}"
+        echo "BBPATH:prepend := \"${BBCLASS_DIR}:\"" >> "${LOCAL_CONF}"
+    fi
 
     # ネットワーク設定（systemd-networkd）
     if [[ "${NETWORK_PROTO}" == "static" ]]; then
         # サブネットマスク → プレフィックス長に変換
         PREFIX=$(echo "${STATIC_NETMASK}" | awk -F. '{sum=0; for(i=1;i<=4;i++){n=$i; for(j=0;j<8;j++){sum+=and(n,1);n=rshift(n,1)}}; print sum}')
-        cat >> "${LOCAL_CONF}" << 'NETEOF'
+        cat >> "${CUSTOM_BBCLASS}" << 'NETEOF'
 
-# ネットワーク設定（static）
-ROOTFS_POSTPROCESS_COMMAND:append = " configure_network;"
 configure_network () {
     mkdir -p ${IMAGE_ROOTFS}/etc/systemd/network
     cat > ${IMAGE_ROOTFS}/etc/systemd/network/10-eth0.network << EOF
@@ -286,18 +300,18 @@ EOF
     ln -sf /lib/systemd/system/systemd-networkd.service \
         ${IMAGE_ROOTFS}/etc/systemd/system/multi-user.target.wants/systemd-networkd.service 2>/dev/null || true
 }
+
+ROOTFS_POSTPROCESS_COMMAND:append = " configure_network;"
 NETEOF
         sed -i \
             -e "s|__STATIC_IP__|${STATIC_IP}|g" \
             -e "s|__PREFIX__|${PREFIX}|g" \
             -e "s|__STATIC_GATEWAY__|${STATIC_GATEWAY}|g" \
             -e "s|__STATIC_DNS__|${STATIC_DNS}|g" \
-            "${LOCAL_CONF}"
+            "${CUSTOM_BBCLASS}"
     else
-        cat >> "${LOCAL_CONF}" << 'NETEOF'
+        cat >> "${CUSTOM_BBCLASS}" << 'NETEOF'
 
-# ネットワーク設定（DHCP）
-ROOTFS_POSTPROCESS_COMMAND:append = " configure_network;"
 configure_network () {
     mkdir -p ${IMAGE_ROOTFS}/etc/systemd/network
     cat > ${IMAGE_ROOTFS}/etc/systemd/network/10-eth0.network << EOF
@@ -310,6 +324,8 @@ EOF
     ln -sf /lib/systemd/system/systemd-networkd.service \
         ${IMAGE_ROOTFS}/etc/systemd/system/multi-user.target.wants/systemd-networkd.service 2>/dev/null || true
 }
+
+ROOTFS_POSTPROCESS_COMMAND:append = " configure_network;"
 NETEOF
     fi
 
