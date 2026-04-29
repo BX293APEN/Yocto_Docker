@@ -22,13 +22,8 @@ services:
       - ${VOLUME}:/${WS}   # ホスト ./build → コンテナ内 /build
 
     privileged: true        # mount / losetup に必須
-    
     security_opt:
       - apparmor:unconfined    # Ubuntu24.04のAppArmorによるuser namespace制限を回避
-    
-    cap_add:
-      - SYS_ADMIN
-
     userns_mode: host          # ホストのuser namespaceを使用
     pid: host
 
