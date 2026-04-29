@@ -163,58 +163,66 @@ docker compose up --build -d
 
 ## 📦 インストールされるパッケージ
 
-### 🔵 core-image-minimal（最小構成）
+3種類のベースイメージは**上位互換**です。  
+`core-image-base` は `core-image-minimal` の全パッケージを含み、  
+`core-image-full-cmdline` はさらにその全パッケージを含みます。
 
-ブートに必要な最小限のみ。`packagegroup-core-boot` だけが含まれます。
+```
+core-image-minimal
+  └─ core-image-base（minimal の全パッケージ ＋ ハードウェアサポート）
+       └─ core-image-full-cmdline（base の全パッケージ ＋ 実用CLIツール群）← デフォルト
+```
+
+---
+
+### 🔵 core-image-minimal のパッケージ
+
+ブートに必要な最小限のみ（`packagegroup-core-boot`）。
 
 | パッケージ | 説明 |
 |-----------|------|
 | base-files | /etc, /tmp 等の基本ディレクトリ構造 |
 | base-passwd | /etc/passwd, /etc/group の基本エントリ |
-| busybox | ls, cat, sh, mount 等 100 以上のコマンドを 1 バイナリに統合 |
+| busybox | ls, cat, sh, mount 等 100以上のコマンドを1バイナリに統合 |
 | netbase | /etc/protocols, /etc/services 等のネットワーク設定ファイル |
-| systemd | init / サービスマネージャー（DISTRO_FEATURES に依存） |
+| systemd | init / サービスマネージャー |
 | udev | デバイスマネージャー |
 | grub-efi | EFI ブートローダー（x86_64 の場合） |
 
-> `nano` も `bash` も `ip` コマンドも入っていません。  
-> SSH も含まれません。本当に「起動するだけ」のイメージです。
+> `bash` も `ip` コマンドも SSH も含まれません。本当に「起動するだけ」のイメージです。
 
 ---
 
-### 🟡 core-image-base（ハードウェアフルサポート）
+### 🟡 core-image-base のパッケージ
 
-minimal に `splash`（起動画面）を追加し、`packagegroup-base-extended` も含まれます。  
-WiFi・Bluetooth・シリアル等のハードウェアドライバが MACHINE_FEATURES に応じて自動追加されます。
-
-**minimal の全パッケージ ＋ ハードウェア依存で追加されるもの（x86_64 の例）:**
+**minimal の全パッケージ（上記すべて）＋** 以下が追加されます。
 
 | パッケージ | 説明 |
 |-----------|------|
 | psplash | 起動スプラッシュスクリーン |
 | kernel-modules | 該当 MACHINE のカーネルモジュール一式 |
-| （WiFi 対応機の場合）wpa-supplicant | WiFi 接続管理 |
-| （Bluetooth 対応機の場合）bluez5 | Bluetooth スタック |
-| （シリアル対応機の場合）setserial | シリアルポート設定 |
+| wpa-supplicant | WiFi 接続管理（WiFi 対応ハードウェアの場合） |
+| bluez5 | Bluetooth スタック（BT 対応ハードウェアの場合） |
+| setserial | シリアルポート設定（シリアル対応ハードウェアの場合） |
 
 > `bash` や `ip` コマンドはここでも含まれません。
 
 ---
 
-### 🟢 core-image-full-cmdline（実用 CLI 環境）← **デフォルト・推奨**
+### 🟢 core-image-full-cmdline のパッケージ ← **デフォルト・推奨**
 
-`packagegroup-core-boot` ＋ `packagegroup-core-full-cmdline` で構成されます。  
-poky の公式ソース (`packagegroup-core-full-cmdline.bb`) に基づく正確なパッケージ一覧です。
+**base の全パッケージ（上記すべて）＋** 以下が追加されます。  
+poky 公式ソース `packagegroup-core-full-cmdline.bb` に基づく正確な一覧です。
 
-**[utils] 基本コマンド群:**
+**基本コマンド群:**
 
 | パッケージ | 説明 |
 |-----------|------|
-| bash | GNU Bash シェル |
+| bash | GNU Bash シェル（busybox の sh とは別に追加） |
 | acl | アクセス制御リスト (getfacl / setfacl) |
 | attr | 拡張属性 (getattr / setattr) |
 | bc | 精度指定可能な電卓 |
-| coreutils | ls, cp, mv, cat, echo, chmod 等 GNU 版コアコマンド |
+| coreutils | ls, cp, mv, cat, chmod 等 GNU 版コアコマンド（busybox より高機能） |
 | cpio | アーカイブツール |
 | e2fsprogs | ext2/3/4 ファイルシステムツール (mkfs.ext4, fsck 等) |
 | ed | GNU ラインエディタ |
@@ -224,9 +232,9 @@ poky の公式ソース (`packagegroup-core-full-cmdline.bb`) に基づく正確
 | grep | GNU grep |
 | less | ページャー |
 | makedevs | デバイスファイル作成ツール |
-| mc | Midnight Commander (ファイラー) |
+| mc | Midnight Commander (CUI ファイラー) |
 | ncurses | ターミナル制御ライブラリ / tput 等 |
-| net-tools | ifconfig, route, netstat (旧来ツール) |
+| net-tools | ifconfig, route, netstat（旧来ツール） |
 | procps | ps, top, free, kill, vmstat 等 |
 | psmisc | killall, fuser, pstree |
 | sed | GNU sed |
@@ -234,7 +242,7 @@ poky の公式ソース (`packagegroup-core-full-cmdline.bb`) に基づく正確
 | time | コマンド実行時間計測 |
 | util-linux | fdisk, lsblk, mount, blkid, dmesg, su 等 |
 
-**[extended] ネットワーク・セキュリティ:**
+**ネットワーク・セキュリティ:**
 
 | パッケージ | 説明 |
 |-----------|------|
@@ -244,7 +252,7 @@ poky の公式ソース (`packagegroup-core-full-cmdline.bb`) に基づく正確
 | module-init-tools | modprobe, lsmod, rmmod 等 |
 | openssl | SSL/TLS ライブラリ・コマンド |
 
-**[dev-utils] 開発ツール:**
+**開発ツール:**
 
 | パッケージ | 説明 |
 |-----------|------|
@@ -253,7 +261,7 @@ poky の公式ソース (`packagegroup-core-full-cmdline.bb`) に基づく正確
 | make | GNU make |
 | patch | パッチ適用ツール |
 
-**[multiuser] マルチユーザー管理:**
+**マルチユーザー管理:**
 
 | パッケージ | 説明 |
 |-----------|------|
@@ -263,36 +271,28 @@ poky の公式ソース (`packagegroup-core-full-cmdline.bb`) に基づく正確
 | shadow | useradd, passwd 等ユーザー管理コマンド |
 | sudo | sudo コマンド |
 
-**[initscripts] 初期化スクリプト:**
+**初期化スクリプト・システムサービス:**
 
 | パッケージ | 説明 |
 |-----------|------|
-| systemd / sysvinit | init マネージャー（DISTRO_FEATURES に依存） |
 | ethtool | NIC 情報表示・設定 |
 | sysklogd | syslog デーモン |
-| login (shadow) | ログインマネージャー |
-
-**[sys-services] システムサービス:**
-
-| パッケージ | 説明 |
-|-----------|------|
 | at | ジョブスケジューラ (at コマンド) |
 | cronie | cron デーモン |
 | logrotate | ログローテーション |
 
-**[IMAGE_FEATURES による自動追加]（core-image-full-cmdline のデフォルト）:**
-
-| 機能 | パッケージ |
-|------|-----------|
-| `ssh-server-openssh` | openssh, openssh-sshd, openssh-sftp-server, openssh-ssh |
-| `package-management` | opkg, opkg-collateral（パッケージマネージャー） |
-| `splash` | psplash |
-
-**[このプロジェクトで追加:]**
+**IMAGE_FEATURES による自動追加（core-image-full-cmdline のデフォルト）:**
 
 | パッケージ | 説明 |
 |-----------|------|
-| nano | テキストエディタ（EXTRA_PACKAGES で指定） |
+| openssh, openssh-sshd, openssh-sftp-server, openssh-ssh | SSH サーバー・クライアント |
+| opkg, opkg-collateral | パッケージマネージャー（起動後の `opkg install` に必要） |
+
+**このプロジェクトで追加（EXTRA_PACKAGES）:**
+
+| パッケージ | 説明 |
+|-----------|------|
+| nano | テキストエディタ |
 
 > **本番環境向け**: `local.conf` の `EXTRA_IMAGE_FEATURES` から
 > `debug-tweaks` を除去し、強いパスワードを設定してください。
