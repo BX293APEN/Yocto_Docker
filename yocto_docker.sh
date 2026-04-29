@@ -244,6 +244,61 @@ SSHEOF
         echo "IMAGE_INSTALL:append = \" ${PKGS}\"" >> "${LOCAL_CONF}"
     fi
 
+    # rootパスワード設定
+    cat >> "${LOCAL_CONF}" << ROOTPWEOF
+
+# root パスワード設定
+ROOTFS_POSTPROCESS_COMMAND:append = " set_root_password;"
+set_root_password() {
+    echo "root:${ROOT_PASSWORD}" | chpasswd -R \${IMAGE_ROOTDIR} 2>/dev/null || \
+        sed -i "s|^root:[^:]*:|root:\$(echo '${ROOT_PASSWORD}' | openssl passwd -6 -stdin):|" \
+            \${IMAGE_ROOTDIR}/etc/shadow || true
+}
+ROOTPWEOF
+
+    # ネットワーク設定（systemd-networkd）
+    if [[ "${NETWORK_PROTO}" == "static" ]]; then
+        # サブネットマスク → プレフィックス長に変換
+        PREFIX=$(echo "${STATIC_NETMASK}" | awk -F. '{sum=0; for(i=1;i<=4;i++){n=$i; for(j=0;j<8;j++){sum+=and(n,1);n=rshift(n,1)}}; print sum}')
+        cat >> "${LOCAL_CONF}" << NETEOF
+
+# ネットワーク設定（static）
+ROOTFS_POSTPROCESS_COMMAND:append = " configure_network;"
+configure_network() {
+    mkdir -p \${IMAGE_ROOTDIR}/etc/systemd/network
+    cat > \${IMAGE_ROOTDIR}/etc/systemd/network/10-eth0.network << EOF
+[Match]
+Name=eth*
+
+[Network]
+Address=${STATIC_IP}/${PREFIX}
+Gateway=${STATIC_GATEWAY}
+DNS=${STATIC_DNS}
+EOF
+    ln -sf /lib/systemd/system/systemd-networkd.service \
+        \${IMAGE_ROOTDIR}/etc/systemd/system/multi-user.target.wants/systemd-networkd.service 2>/dev/null || true
+}
+NETEOF
+    else
+        cat >> "${LOCAL_CONF}" << NETEOF
+
+# ネットワーク設定（DHCP）
+ROOTFS_POSTPROCESS_COMMAND:append = " configure_network;"
+configure_network() {
+    mkdir -p \${IMAGE_ROOTDIR}/etc/systemd/network
+    cat > \${IMAGE_ROOTDIR}/etc/systemd/network/10-eth0.network << EOF
+[Match]
+Name=eth*
+
+[Network]
+DHCP=yes
+EOF
+    ln -sf /lib/systemd/system/systemd-networkd.service \
+        \${IMAGE_ROOTDIR}/etc/systemd/system/multi-user.target.wants/systemd-networkd.service 2>/dev/null || true
+}
+NETEOF
+    fi
+
     # rootパスワードを空にしない設定（デバッグ用）
     if ! grep -q "EXTRA_IMAGE_FEATURES.*debug-tweaks" "${LOCAL_CONF}"; then
         echo "" >> "${LOCAL_CONF}"
@@ -276,56 +331,18 @@ if [[ -n "${EXTRA_LAYER}" ]]; then
 fi
 
 # ─────────────────────────────────────────────
-# 6. rootfs カスタマイズ用スクリプトの準備
+# 6. rootfs カスタマイズの確認ログ
 # ─────────────────────────────────────────────
-step "6. rootfs カスタマイズ"
+step "6. rootfs カスタマイズ確認"
 
-CUSTOM_RECIPE_DIR="${POKY_DIR}/meta/recipes-custom"
-CUSTOM_INIT_SCRIPT="${BUILD_DIR}/conf/yocto-custom-init.sh"
-
-# ネットワーク設定スクリプト（ビルド後に wic 内に配置）
-cat > "${CUSTOM_INIT_SCRIPT}" << INITEOF
-#!/bin/sh
-# Yocto カスタム初期化スクリプト
-# このスクリプトは直接 rootfs には注入されません。
-# local.conf の IMAGE_ROOTFS_POSTPROCESS_COMMAND で呼び出すか、
-# カスタムレイヤーのレシピ内で配置してください。
-# 詳細は README.md を参照してください。
-
-# rootパスワード設定
-echo "root:${ROOT_PASSWORD}" | chpasswd 2>/dev/null || \
-    echo "root:$(openssl passwd -6 '${ROOT_PASSWORD}')" | chpasswd -e 2>/dev/null || true
-
-# タイムゾーン設定
-echo "${TIME_ZONE}" > /etc/timezone
-ln -sf /usr/share/zoneinfo/${TIME_ZONE} /etc/localtime 2>/dev/null || true
-
-# ネットワーク設定(systemd-networkd想定)
-NETCONF=/etc/systemd/network/10-eth0.network
-mkdir -p /etc/systemd/network
-
-if [ "${NETWORK_PROTO}" = "static" ]; then
-    cat > "\${NETCONF}" << EOF
-[Match]
-Name=eth*
-
-[Network]
-Address=${STATIC_IP}/$(echo "${STATIC_NETMASK}" | awk -F. '{sum=0; for(i=1;i<=4;i++) {n=\$i; for(j=0;j<8;j++){sum+=and(n,1); n=rshift(n,1)}}; print sum}')
-Gateway=${STATIC_GATEWAY}
-DNS=${STATIC_DNS}
-EOF
-else
-    cat > "\${NETCONF}" << EOF
-[Match]
-Name=eth*
-
-[Network]
-DHCP=yes
-EOF
+log "ROOT_PASSWORD  : (設定済み → IMAGE_ROOTFS_POSTPROCESS_COMMAND で反映)"
+log "NETWORK_PROTO  : ${NETWORK_PROTO}"
+if [[ "${NETWORK_PROTO}" == "static" ]]; then
+    log "STATIC_IP      : ${STATIC_IP}"
+    log "STATIC_GATEWAY : ${STATIC_GATEWAY}"
+    log "STATIC_DNS     : ${STATIC_DNS}"
 fi
-INITEOF
-chmod +x "${CUSTOM_INIT_SCRIPT}"
-log "カスタム初期化スクリプトを生成: ${CUSTOM_INIT_SCRIPT}"
+log "TIME_ZONE      : ${TIME_ZONE}"
 
 # ─────────────────────────────────────────────
 # 7. bitbake ビルド
