@@ -28,6 +28,9 @@ CPU_CORE="${CPU_CORE:-4}"
 WS="${WS:-build}"
 EXTRA_PACKAGES="${EXTRA_PACKAGES:-}"
 
+# ── systemd ──
+USE_SYSTEMD="${USE_SYSTEMD:-false}"
+
 # ── ネットワーク設定 ──
 NETWORK_PROTO="${NETWORK_PROTO:-dhcp}"
 STATIC_IP="${STATIC_IP:-}"
@@ -308,6 +311,17 @@ NETEOF
 
     # wic用: rootfs.tar.gz 出力
     echo "IMAGE_FSTYPES:append = \" tar.gz\"" >> "${LOCAL_CONF}"
+
+    # systemd init manager
+    if [[ "${USE_SYSTEMD}" == "true" ]]; then
+        cat >> "${LOCAL_CONF}" << 'SYSTEMDEOF'
+
+# systemd を init manager として使用
+DISTRO_FEATURES:append = " systemd"
+VIRTUAL-RUNTIME_init_manager = "systemd"
+VIRTUAL-RUNTIME_initscripts = ""
+SYSTEMDEOF
+    fi
 
     log "local.conf のカスタマイズ完了"
 }

@@ -50,6 +50,8 @@ services:
       - SSH_PORT=${SSH_PORT}
       # ── 認証 ──
       - ROOT_PASSWORD=${ROOT_PASSWORD}
+      # ── systemd ──
+      - USE_SYSTEMD=${USE_SYSTEMD}
 
     command:
       - /${ENTRY_DIR}/${ENTRY_POINT}
