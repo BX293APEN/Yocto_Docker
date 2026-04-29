@@ -5,69 +5,6 @@ Docker 上で Yocto Linux をビルドし、
 
 ---
 
-## 📁 ファイル構成
-
-```
-.
-├── compose.yml             # Docker Compose 設定
-├── Dockerfile              # Ubuntu 22.04 ベースのビルド環境
-├── .env                    # 環境変数（バージョン・デバイス等）← ここを編集
-├── yocto_docker.sh         # コンテナ内ビルドスクリプト（エントリーポイント）
-├── tar2img.sh              # rootfs.tar.gz → .img 変換スクリプト（任意）
-├── morning.sh              # USB書き込みスクリプト（ホストで実行）
-└── build/                  # ビルド成果物（gitignore 推奨）
-    ├── poky/               # Yocto poky リポジトリ
-    ├── meta-raspberrypi/   # RPi レイヤー（rpi系デバイスのみ）
-    ├── build_yocto/        # Yocto ビルドディレクトリ
-    │   └── tmp/deploy/     # ビルド成果物（bitbake 出力）
-    ├── downloads/          # ソースキャッシュ（再ビルド高速化）
-    ├── sstate-cache/       # ビルドキャッシュ（再ビルド高速化）
-    ├── images/             # コピーされた全成果物
-    ├── yocto-image.wic.gz  # USB書き込み用イメージ（メイン成果物）
-    ├── yocto-rootfs.tar.gz # rootfs アーカイブ
-    ├── build.log           # ビルドログ
-    ├── bitbake.log         # bitbake 詳細ログ
-    └── FLAGS/.build_done   # ビルド完了フラグ
-```
-
----
-
-## ⚙️ カスタマイズ（`.env` を編集）
-
-| 変数 | 説明 | デフォルト |
-|------|------|-----------|
-| `DEVICE_PROFILE` | **ターゲットデバイス**（下表参照） | `x86_64` |
-| `YOCTO_RELEASE` | Yocto リリース名 | `scarthgap` |
-| `CPU_CORE` | ビルド並列数 | `4` |
-| `NETWORK_PROTO` | ネットワーク設定 (`dhcp`/`static`) | `dhcp` |
-| `TIME_ZONE` | タイムゾーン | `Asia/Tokyo` |
-| `ENABLE_SSH` | SSH サーバー有効化 | `true` |
-| `ROOT_PASSWORD` | root パスワード | `password` |
-| `EXTRA_PACKAGES` | 追加パッケージ（スペース区切り） | `nano` |
-
-### DEVICE_PROFILE の選択肢
-
-| 値 | 対象デバイス | MACHINE | 書き込み先 |
-|----|-------------|---------|-----------|
-| `x86_64` | PC / VM / x86 USB | genericx86-64 | USB / SSD |
-| `rpi4` | Raspberry Pi 4 | raspberrypi4-64 | microSD / USB |
-| `rpi3` | Raspberry Pi 3 | raspberrypi3-64 | microSD / USB |
-| `qemux86_64` | QEMU 仮想マシン（動作確認用） | qemux86-64 | — |
-
-> **MACHINE / IMAGE を直接指定したい場合**は、
-> `.env` の `MACHINE=` / `IMAGE=` に直接記入すると `DEVICE_PROFILE` より優先されます。
-
-### Yocto リリース一覧
-
-| ブランチ名 | バージョン | サポート期間 |
-|-----------|-----------|------------|
-| `scarthgap` | 5.0 LTS | 2024〜2026 ← **推奨** |
-| `nanbield` | 4.3 | 短期 |
-| `mickledore` | 4.2 | 短期 |
-| `kirkstone` | 4.0 LTS | 2022〜2024 |
-
----
-
 ## 🌙 ビルド手順
 
 ### 1. `.env` を編集
@@ -83,7 +20,7 @@ nano .env
 ### 2. ビルド開始
 
 ```bash
-docker compose up --build -d
+echo 0 | sudo tee /proc/sys/kernel/apparmor_restrict_unprivileged_userns && docker compose up --build -d
 ```
 
 ### 3. 進捗確認
@@ -149,15 +86,79 @@ qemu-system-x86_64 \
 
 ```bash
 rm ./build/FLAGS/.build_done
-docker compose up --build -d
+echo 0 | sudo tee /proc/sys/kernel/apparmor_restrict_unprivileged_userns && docker compose up --build -d
 ```
 
 ダウンロードキャッシュも消したい場合:
 
 ```bash
 rm -rf ./build/
-docker compose up --build -d
+echo 0 | sudo tee /proc/sys/kernel/apparmor_restrict_unprivileged_userns && docker compose up --build -d
 ```
+
+
+---
+
+## 📁 ファイル構成
+
+```
+.
+├── compose.yml             # Docker Compose 設定
+├── Dockerfile              # Ubuntu 22.04 ベースのビルド環境
+├── .env                    # 環境変数（バージョン・デバイス等）← ここを編集
+├── yocto_docker.sh         # コンテナ内ビルドスクリプト（エントリーポイント）
+├── tar2img.sh              # rootfs.tar.gz → .img 変換スクリプト（任意）
+├── morning.sh              # USB書き込みスクリプト（ホストで実行）
+└── build/                  # ビルド成果物（gitignore 推奨）
+    ├── poky/               # Yocto poky リポジトリ
+    ├── meta-raspberrypi/   # RPi レイヤー（rpi系デバイスのみ）
+    ├── build_yocto/        # Yocto ビルドディレクトリ
+    │   └── tmp/deploy/     # ビルド成果物（bitbake 出力）
+    ├── downloads/          # ソースキャッシュ（再ビルド高速化）
+    ├── sstate-cache/       # ビルドキャッシュ（再ビルド高速化）
+    ├── images/             # コピーされた全成果物
+    ├── yocto-image.wic.gz  # USB書き込み用イメージ（メイン成果物）
+    ├── yocto-rootfs.tar.gz # rootfs アーカイブ
+    ├── build.log           # ビルドログ
+    ├── bitbake.log         # bitbake 詳細ログ
+    └── FLAGS/.build_done   # ビルド完了フラグ
+```
+
+---
+
+## ⚙️ カスタマイズ（`.env` を編集）
+
+| 変数 | 説明 | デフォルト |
+|------|------|-----------|
+| `DEVICE_PROFILE` | **ターゲットデバイス**（下表参照） | `x86_64` |
+| `YOCTO_RELEASE` | Yocto リリース名 | `scarthgap` |
+| `CPU_CORE` | ビルド並列数 | `4` |
+| `NETWORK_PROTO` | ネットワーク設定 (`dhcp`/`static`) | `dhcp` |
+| `TIME_ZONE` | タイムゾーン | `Asia/Tokyo` |
+| `ENABLE_SSH` | SSH サーバー有効化 | `true` |
+| `ROOT_PASSWORD` | root パスワード | `password` |
+| `EXTRA_PACKAGES` | 追加パッケージ（スペース区切り） | `nano` |
+
+### DEVICE_PROFILE の選択肢
+
+| 値 | 対象デバイス | MACHINE | 書き込み先 |
+|----|-------------|---------|-----------|
+| `x86_64` | PC / VM / x86 USB | genericx86-64 | USB / SSD |
+| `rpi4` | Raspberry Pi 4 | raspberrypi4-64 | microSD / USB |
+| `rpi3` | Raspberry Pi 3 | raspberrypi3-64 | microSD / USB |
+| `qemux86_64` | QEMU 仮想マシン（動作確認用） | qemux86-64 | — |
+
+> **MACHINE / IMAGE を直接指定したい場合**は、
+> `.env` の `MACHINE=` / `IMAGE=` に直接記入すると `DEVICE_PROFILE` より優先されます。
+
+### Yocto リリース一覧
+
+| ブランチ名 | バージョン | サポート期間 |
+|-----------|-----------|------------|
+| `scarthgap` | 5.0 LTS | 2024〜2026 ← **推奨** |
+| `nanbield` | 4.3 | 短期 |
+| `mickledore` | 4.2 | 短期 |
+| `kirkstone` | 4.0 LTS | 2022〜2024 |
 
 ---
 
@@ -352,7 +353,7 @@ EXTRA_PACKAGES=nano vim curl htop python3
 ```bash
 # 再ビルド
 rm ./build/FLAGS/.build_done
-docker compose up --build -d
+echo 0 | sudo tee /proc/sys/kernel/apparmor_restrict_unprivileged_userns && docker compose up --build -d
 ```
 
 ---
