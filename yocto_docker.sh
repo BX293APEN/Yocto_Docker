@@ -253,7 +253,10 @@ SSHEOF
     # rootパスワード設定
     # BitBake の conf パーサーはシェル関数構文を解釈できないため、
     # 関数定義は .bbclass に分離し、local.conf からは inherit + 変数代入のみ行う。
-    BBCLASS_DIR="${BUILD_DIR}/conf"
+    # BitBake は BBPATH 配下の classes/ サブディレクトリを検索する
+    # conf/ に置いても classes/ が無いと "Could not inherit" になる
+    BBCLASS_DIR="${BUILD_DIR}/classes"
+    mkdir -p "${BBCLASS_DIR}"
     CUSTOM_BBCLASS="${BBCLASS_DIR}/yocto-docker-custom.bbclass"
 
     # bbclass の書き出し (ヒアドキュメントは '' で変数展開を抑止し、
@@ -277,7 +280,7 @@ BBCLASSEOF
         echo "" >> "${LOCAL_CONF}"
         echo "# カスタマイズクラス (rootパスワード / ネットワーク設定)" >> "${LOCAL_CONF}"
         echo "INHERIT += \"yocto-docker-custom\"" >> "${LOCAL_CONF}"
-        echo "BBPATH:prepend := \"${BBCLASS_DIR}:\"" >> "${LOCAL_CONF}"
+        echo "BBPATH:prepend := \"${BUILD_DIR}:\"" >> "${LOCAL_CONF}"
     fi
 
     # ネットワーク設定（systemd-networkd）
