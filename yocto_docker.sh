@@ -255,10 +255,10 @@ SSHEOF
 
 # root パスワード設定
 ROOTFS_POSTPROCESS_COMMAND:append = " set_root_password;"
-set_root_password() {
-    echo "root:${ROOT_PASSWORD}" | chpasswd -R \${IMAGE_ROOTDIR} 2>/dev/null || \
-        sed -i "s|^root:[^:]*:|root:\$(echo '${ROOT_PASSWORD}' | openssl passwd -6 -stdin):|" \
-            \${IMAGE_ROOTDIR}/etc/shadow || true
+set_root_password () {
+    echo "root:${ROOT_PASSWORD}" | chpasswd -R \${IMAGE_ROOTFS} 2>/dev/null || \
+        sed -i "s|^root:[^:]*:|root:\$(openssl passwd -6 '${ROOT_PASSWORD}'):|" \
+            \${IMAGE_ROOTFS}/etc/shadow || true
 }
 ROOTPWEOF
 
@@ -270,9 +270,9 @@ ROOTPWEOF
 
 # ネットワーク設定（static）
 ROOTFS_POSTPROCESS_COMMAND:append = " configure_network;"
-configure_network() {
-    mkdir -p \${IMAGE_ROOTDIR}/etc/systemd/network
-    cat > \${IMAGE_ROOTDIR}/etc/systemd/network/10-eth0.network << EOF
+configure_network () {
+    mkdir -p \${IMAGE_ROOTFS}/etc/systemd/network
+    cat > \${IMAGE_ROOTFS}/etc/systemd/network/10-eth0.network << EOF
 [Match]
 Name=eth*
 
@@ -282,7 +282,7 @@ Gateway=${STATIC_GATEWAY}
 DNS=${STATIC_DNS}
 EOF
     ln -sf /lib/systemd/system/systemd-networkd.service \
-        \${IMAGE_ROOTDIR}/etc/systemd/system/multi-user.target.wants/systemd-networkd.service 2>/dev/null || true
+        \${IMAGE_ROOTFS}/etc/systemd/system/multi-user.target.wants/systemd-networkd.service 2>/dev/null || true
 }
 NETEOF
     else
@@ -290,9 +290,9 @@ NETEOF
 
 # ネットワーク設定（DHCP）
 ROOTFS_POSTPROCESS_COMMAND:append = " configure_network;"
-configure_network() {
-    mkdir -p \${IMAGE_ROOTDIR}/etc/systemd/network
-    cat > \${IMAGE_ROOTDIR}/etc/systemd/network/10-eth0.network << EOF
+configure_network () {
+    mkdir -p \${IMAGE_ROOTFS}/etc/systemd/network
+    cat > \${IMAGE_ROOTFS}/etc/systemd/network/10-eth0.network << EOF
 [Match]
 Name=eth*
 
@@ -300,7 +300,7 @@ Name=eth*
 DHCP=yes
 EOF
     ln -sf /lib/systemd/system/systemd-networkd.service \
-        \${IMAGE_ROOTDIR}/etc/systemd/system/multi-user.target.wants/systemd-networkd.service 2>/dev/null || true
+        \${IMAGE_ROOTFS}/etc/systemd/system/multi-user.target.wants/systemd-networkd.service 2>/dev/null || true
 }
 NETEOF
     fi
