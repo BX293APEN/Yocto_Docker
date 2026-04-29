@@ -345,7 +345,6 @@ NETEOF
     # systemd init manager
     if [[ "${USE_SYSTEMD}" == "true" ]]; then
         cat >> "${LOCAL_CONF}" << 'SYSTEMDEOF'
-PACKAGECONFIG:append:pn-systemd = " networkd resolved"
 
 # systemd を init manager として使用
 DISTRO_FEATURES:append = " systemd"
