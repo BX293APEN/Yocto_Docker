@@ -161,27 +161,138 @@ docker compose up --build -d
 
 ---
 
-## 📦 デフォルトでインストールされるパッケージ
+## 📦 インストールされるパッケージ
 
-ベースイメージ `core-image-full-cmdline` に加え、以下が自動で組み込まれます。
+### 🔵 core-image-minimal（最小構成）
 
-| カテゴリ | パッケージ | 備考 |
-|---------|-----------|------|
-| シェル | bash, coreutils (ls/cp/mv等), util-linux | `core-image-full-cmdline` に含まれる |
-| プロセス | procps (ps/top/free), htop相当 | 同上 |
-| ネットワーク | iproute2 (ip コマンド), iputils (ping) | 同上 |
-| SSH | openssh, openssh-sshd, openssh-sftp-server, openssh-ssh | ENABLE_SSH=true の場合 |
-| エディタ | nano | EXTRA_PACKAGES に追加済み |
-| システム | systemd, udev, systemd-networkd | |
-| タイムゾーン | Asia/Tokyo | .env で変更可能 |
+ブートに必要な最小限のみ。`packagegroup-core-boot` だけが含まれます。
 
-### ベースイメージの違い（IMAGE= で切り替え可能）
+| パッケージ | 説明 |
+|-----------|------|
+| base-files | /etc, /tmp 等の基本ディレクトリ構造 |
+| base-passwd | /etc/passwd, /etc/group の基本エントリ |
+| busybox | ls, cat, sh, mount 等 100 以上のコマンドを 1 バイナリに統合 |
+| netbase | /etc/protocols, /etc/services 等のネットワーク設定ファイル |
+| systemd | init / サービスマネージャー（DISTRO_FEATURES に依存） |
+| udev | デバイスマネージャー |
+| grub-efi | EFI ブートローダー（x86_64 の場合） |
 
-| IMAGE | サイズ感 | 内容 |
-|-------|---------|------|
-| `core-image-minimal` | 最小 | busybox + systemd のみ。nano/curl/bash すら含まない。ストレージを極限まで節約したい場合。 |
-| `core-image-base` | 小 | minimal にシリアルコンソール対応を追加。組み込み専用機器向け。 |
-| `core-image-full-cmdline` | 中 | bash, coreutils, util-linux, ssh-client 等を含む実用的な CLI 環境。**← デフォルト・推奨** |
+> `nano` も `bash` も `ip` コマンドも入っていません。  
+> SSH も含まれません。本当に「起動するだけ」のイメージです。
+
+---
+
+### 🟡 core-image-base（ハードウェアフルサポート）
+
+minimal に `splash`（起動画面）を追加し、`packagegroup-base-extended` も含まれます。  
+WiFi・Bluetooth・シリアル等のハードウェアドライバが MACHINE_FEATURES に応じて自動追加されます。
+
+**minimal の全パッケージ ＋ ハードウェア依存で追加されるもの（x86_64 の例）:**
+
+| パッケージ | 説明 |
+|-----------|------|
+| psplash | 起動スプラッシュスクリーン |
+| kernel-modules | 該当 MACHINE のカーネルモジュール一式 |
+| （WiFi 対応機の場合）wpa-supplicant | WiFi 接続管理 |
+| （Bluetooth 対応機の場合）bluez5 | Bluetooth スタック |
+| （シリアル対応機の場合）setserial | シリアルポート設定 |
+
+> `bash` や `ip` コマンドはここでも含まれません。
+
+---
+
+### 🟢 core-image-full-cmdline（実用 CLI 環境）← **デフォルト・推奨**
+
+`packagegroup-core-boot` ＋ `packagegroup-core-full-cmdline` で構成されます。  
+poky の公式ソース (`packagegroup-core-full-cmdline.bb`) に基づく正確なパッケージ一覧です。
+
+**[utils] 基本コマンド群:**
+
+| パッケージ | 説明 |
+|-----------|------|
+| bash | GNU Bash シェル |
+| acl | アクセス制御リスト (getfacl / setfacl) |
+| attr | 拡張属性 (getattr / setattr) |
+| bc | 精度指定可能な電卓 |
+| coreutils | ls, cp, mv, cat, echo, chmod 等 GNU 版コアコマンド |
+| cpio | アーカイブツール |
+| e2fsprogs | ext2/3/4 ファイルシステムツール (mkfs.ext4, fsck 等) |
+| ed | GNU ラインエディタ |
+| file | ファイル種別判定コマンド |
+| findutils | find, xargs |
+| gawk | GNU awk |
+| grep | GNU grep |
+| less | ページャー |
+| makedevs | デバイスファイル作成ツール |
+| mc | Midnight Commander (ファイラー) |
+| ncurses | ターミナル制御ライブラリ / tput 等 |
+| net-tools | ifconfig, route, netstat (旧来ツール) |
+| procps | ps, top, free, kill, vmstat 等 |
+| psmisc | killall, fuser, pstree |
+| sed | GNU sed |
+| tar | GNU tar |
+| time | コマンド実行時間計測 |
+| util-linux | fdisk, lsblk, mount, blkid, dmesg, su 等 |
+
+**[extended] ネットワーク・セキュリティ:**
+
+| パッケージ | 説明 |
+|-----------|------|
+| iproute2 | ip コマンド（ifconfig の現代版） |
+| iputils | ping, ping6, tracepath |
+| iptables | ファイアウォール設定 |
+| module-init-tools | modprobe, lsmod, rmmod 等 |
+| openssl | SSL/TLS ライブラリ・コマンド |
+
+**[dev-utils] 開発ツール:**
+
+| パッケージ | 説明 |
+|-----------|------|
+| diffutils | diff, cmp |
+| m4 | マクロプロセッサ |
+| make | GNU make |
+| patch | パッチ適用ツール |
+
+**[multiuser] マルチユーザー管理:**
+
+| パッケージ | 説明 |
+|-----------|------|
+| bzip2 | bzip2 圧縮・展開 |
+| cracklib | パスワード強度チェックライブラリ |
+| gzip | gzip 圧縮・展開 |
+| shadow | useradd, passwd 等ユーザー管理コマンド |
+| sudo | sudo コマンド |
+
+**[initscripts] 初期化スクリプト:**
+
+| パッケージ | 説明 |
+|-----------|------|
+| systemd / sysvinit | init マネージャー（DISTRO_FEATURES に依存） |
+| ethtool | NIC 情報表示・設定 |
+| sysklogd | syslog デーモン |
+| login (shadow) | ログインマネージャー |
+
+**[sys-services] システムサービス:**
+
+| パッケージ | 説明 |
+|-----------|------|
+| at | ジョブスケジューラ (at コマンド) |
+| cronie | cron デーモン |
+| logrotate | ログローテーション |
+
+**[IMAGE_FEATURES による自動追加]（core-image-full-cmdline のデフォルト）:**
+
+| 機能 | パッケージ |
+|------|-----------|
+| `ssh-server-openssh` | openssh, openssh-sshd, openssh-sftp-server, openssh-ssh |
+| `package-management` | opkg, opkg-collateral（パッケージマネージャー） |
+| `splash` | psplash |
+
+**[このプロジェクトで追加:]**
+
+| パッケージ | 説明 |
+|-----------|------|
+| nano | テキストエディタ（EXTRA_PACKAGES で指定） |
 
 > **本番環境向け**: `local.conf` の `EXTRA_IMAGE_FEATURES` から
 > `debug-tweaks` を除去し、強いパスワードを設定してください。
