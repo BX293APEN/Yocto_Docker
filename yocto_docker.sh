@@ -251,48 +251,56 @@ SSHEOF
     fi
 
     # rootパスワード設定
-    cat >> "${LOCAL_CONF}" << ROOTPWEOF
+    # ヒアドキュメントを '' クォートで展開抑止し、ROOT_PASSWORD だけ sed で差し込む
+    cat >> "${LOCAL_CONF}" << 'ROOTPWEOF'
 
 # root パスワード設定
 ROOTFS_POSTPROCESS_COMMAND:append = " set_root_password;"
 set_root_password () {
-    echo "root:${ROOT_PASSWORD}" | chpasswd -R \${IMAGE_ROOTFS} 2>/dev/null || \
-        sed -i "s|^root:[^:]*:|root:\$(openssl passwd -6 '${ROOT_PASSWORD}'):|" \
-            \${IMAGE_ROOTFS}/etc/shadow || true
+    echo "root:__ROOT_PASSWORD__" | chpasswd -R ${IMAGE_ROOTFS} 2>/dev/null || \
+        sed -i "s|^root:[^:]*:|root:$(openssl passwd -6 '__ROOT_PASSWORD__'):|" \
+            ${IMAGE_ROOTFS}/etc/shadow || true
 }
 ROOTPWEOF
+    sed -i "s|__ROOT_PASSWORD__|${ROOT_PASSWORD}|g" "${LOCAL_CONF}"
 
     # ネットワーク設定（systemd-networkd）
     if [[ "${NETWORK_PROTO}" == "static" ]]; then
         # サブネットマスク → プレフィックス長に変換
         PREFIX=$(echo "${STATIC_NETMASK}" | awk -F. '{sum=0; for(i=1;i<=4;i++){n=$i; for(j=0;j<8;j++){sum+=and(n,1);n=rshift(n,1)}}; print sum}')
-        cat >> "${LOCAL_CONF}" << NETEOF
+        cat >> "${LOCAL_CONF}" << 'NETEOF'
 
 # ネットワーク設定（static）
 ROOTFS_POSTPROCESS_COMMAND:append = " configure_network;"
 configure_network () {
-    mkdir -p \${IMAGE_ROOTFS}/etc/systemd/network
-    cat > \${IMAGE_ROOTFS}/etc/systemd/network/10-eth0.network << EOF
+    mkdir -p ${IMAGE_ROOTFS}/etc/systemd/network
+    cat > ${IMAGE_ROOTFS}/etc/systemd/network/10-eth0.network << EOF
 [Match]
 Name=eth*
 
 [Network]
-Address=${STATIC_IP}/${PREFIX}
-Gateway=${STATIC_GATEWAY}
-DNS=${STATIC_DNS}
+Address=__STATIC_IP__/__PREFIX__
+Gateway=__STATIC_GATEWAY__
+DNS=__STATIC_DNS__
 EOF
     ln -sf /lib/systemd/system/systemd-networkd.service \
-        \${IMAGE_ROOTFS}/etc/systemd/system/multi-user.target.wants/systemd-networkd.service 2>/dev/null || true
+        ${IMAGE_ROOTFS}/etc/systemd/system/multi-user.target.wants/systemd-networkd.service 2>/dev/null || true
 }
 NETEOF
+        sed -i \
+            -e "s|__STATIC_IP__|${STATIC_IP}|g" \
+            -e "s|__PREFIX__|${PREFIX}|g" \
+            -e "s|__STATIC_GATEWAY__|${STATIC_GATEWAY}|g" \
+            -e "s|__STATIC_DNS__|${STATIC_DNS}|g" \
+            "${LOCAL_CONF}"
     else
-        cat >> "${LOCAL_CONF}" << NETEOF
+        cat >> "${LOCAL_CONF}" << 'NETEOF'
 
 # ネットワーク設定（DHCP）
 ROOTFS_POSTPROCESS_COMMAND:append = " configure_network;"
 configure_network () {
-    mkdir -p \${IMAGE_ROOTFS}/etc/systemd/network
-    cat > \${IMAGE_ROOTFS}/etc/systemd/network/10-eth0.network << EOF
+    mkdir -p ${IMAGE_ROOTFS}/etc/systemd/network
+    cat > ${IMAGE_ROOTFS}/etc/systemd/network/10-eth0.network << EOF
 [Match]
 Name=eth*
 
@@ -300,7 +308,7 @@ Name=eth*
 DHCP=yes
 EOF
     ln -sf /lib/systemd/system/systemd-networkd.service \
-        \${IMAGE_ROOTFS}/etc/systemd/system/multi-user.target.wants/systemd-networkd.service 2>/dev/null || true
+        ${IMAGE_ROOTFS}/etc/systemd/system/multi-user.target.wants/systemd-networkd.service 2>/dev/null || true
 }
 NETEOF
     fi
