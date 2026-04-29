@@ -72,28 +72,28 @@ _resolve_target() {
     case "${DEVICE_PROFILE}" in
         x86_64)
             MACHINE="${MACHINE:-genericx86-64}"
-            IMAGE="${IMAGE:-core-image-minimal}"
+            IMAGE="${IMAGE:-core-image-full-cmdline}"
             EXTRA_LAYER=""
             EXTRA_LAYER_REPO=""
             IMAGE_FSTYPES_EXTRA="wic.gz wic.bmap"
             ;;
         rpi4)
             MACHINE="${MACHINE:-raspberrypi4-64}"
-            IMAGE="${IMAGE:-core-image-minimal}"
+            IMAGE="${IMAGE:-core-image-full-cmdline}"
             EXTRA_LAYER="meta-raspberrypi"
             EXTRA_LAYER_REPO="https://git.yoctoproject.org/meta-raspberrypi"
             IMAGE_FSTYPES_EXTRA="wic.bz2 wic.bmap"
             ;;
         rpi3)
             MACHINE="${MACHINE:-raspberrypi3-64}"
-            IMAGE="${IMAGE:-core-image-minimal}"
+            IMAGE="${IMAGE:-core-image-full-cmdline}"
             EXTRA_LAYER="meta-raspberrypi"
             EXTRA_LAYER_REPO="https://git.yoctoproject.org/meta-raspberrypi"
             IMAGE_FSTYPES_EXTRA="wic.bz2 wic.bmap"
             ;;
         qemux86_64)
             MACHINE="${MACHINE:-qemux86-64}"
-            IMAGE="${IMAGE:-core-image-minimal}"
+            IMAGE="${IMAGE:-core-image-full-cmdline}"
             EXTRA_LAYER=""
             EXTRA_LAYER_REPO=""
             IMAGE_FSTYPES_EXTRA="ext4"
