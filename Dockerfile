@@ -69,7 +69,7 @@ RUN apt-get update && \
     echo "yocto ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers && \
     # ワークスペース作成
     mkdir -p /${ENTRY_DIR} && \
-    chown -R yocto:yocto /${WS} /${ENTRY_DIR}
+    chown -R yocto:yocto /${ENTRY_DIR}
 
 ENV LANG=en_US.UTF-8
 ENV LC_ALL=en_US.UTF-8
@@ -78,5 +78,4 @@ COPY ${ENTRY_POINT} /${ENTRY_DIR}/${ENTRY_POINT}
 RUN chmod +x /${ENTRY_DIR}/${ENTRY_POINT} && \
     chown yocto:yocto /${ENTRY_DIR}/${ENTRY_POINT}
 
-WORKDIR /${WS}
 USER yocto

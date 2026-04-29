@@ -55,6 +55,7 @@ ROOT_PASSWORD="${ROOT_PASSWORD:-password}"
 LOGFILE="/${WS}/build.log"
 mkdir -p "/${WS}"
 chmod 777 -R "/${WS}"
+cd /${WS}
 exec > >(tee -a "${LOGFILE}") 2>&1
 
 log()  { echo "[INFO]  $(date '+%Y-%m-%d %H:%M:%S') $*"; }
