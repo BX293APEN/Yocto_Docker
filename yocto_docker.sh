@@ -54,6 +54,7 @@ ROOT_PASSWORD="${ROOT_PASSWORD:-password}"
 # ─────────────────────────────────────────────
 LOGFILE="/${WS}/build.log"
 mkdir -p "/${WS}"
+chmod 777 -R "/${WS}"
 exec > >(tee -a "${LOGFILE}") 2>&1
 
 log()  { echo "[INFO]  $(date '+%Y-%m-%d %H:%M:%S') $*"; }
@@ -118,6 +119,7 @@ log "IMAGE         : ${IMAGE}"
 FLAGS_DIR="/${WS}/FLAGS"
 DONE_FLAG="${FLAGS_DIR}/.build_done"
 mkdir -p "${FLAGS_DIR}"
+chmod 777 -R "/${FLAGS_DIR}"
 
 if [[ -f "${DONE_FLAG}" ]]; then
     log "ビルド完了フラグが存在します。スキップします。"
