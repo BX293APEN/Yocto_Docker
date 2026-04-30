@@ -92,28 +92,28 @@ _resolve_target() {
             IMAGE="${IMAGE:-core-image-full-cmdline}"
             EXTRA_LAYER=""
             EXTRA_LAYER_REPO=""
-            IMAGE_FSTYPES_EXTRA="tar.gz"
+            IMAGE_FSTYPES_EXTRA="wic wic.bmap tar.gz"   # wic=USB直書き用, tar.gz=応用・フォールバック用
             ;;
         rpi4)
             MACHINE="${MACHINE:-raspberrypi4-64}"
             IMAGE="${IMAGE:-core-image-full-cmdline}"
             EXTRA_LAYER="meta-raspberrypi"
             EXTRA_LAYER_REPO="https://git.yoctoproject.org/meta-raspberrypi"
-            IMAGE_FSTYPES_EXTRA="wic.bz2 wic.bmap"
+            IMAGE_FSTYPES_EXTRA="wic.bz2 wic.bmap tar.gz"
             ;;
         rpi3)
             MACHINE="${MACHINE:-raspberrypi3-64}"
             IMAGE="${IMAGE:-core-image-full-cmdline}"
             EXTRA_LAYER="meta-raspberrypi"
             EXTRA_LAYER_REPO="https://git.yoctoproject.org/meta-raspberrypi"
-            IMAGE_FSTYPES_EXTRA="wic.bz2 wic.bmap"
+            IMAGE_FSTYPES_EXTRA="wic.bz2 wic.bmap tar.gz"
             ;;
         qemux86_64)
             MACHINE="${MACHINE:-qemux86-64}"
             IMAGE="${IMAGE:-core-image-full-cmdline}"
             EXTRA_LAYER=""
             EXTRA_LAYER_REPO=""
-            IMAGE_FSTYPES_EXTRA="ext4"
+            IMAGE_FSTYPES_EXTRA="ext4 tar.gz"
             ;;
         *)
             err "未知の DEVICE_PROFILE: '${DEVICE_PROFILE}'" \
@@ -662,7 +662,51 @@ if [[ -n "${TAR_FILE}" ]]; then
     cp -v "${TAR_FILE}" "/${WS}/yocto-rootfs.tar.gz"
     log "rootfs → /${WS}/yocto-rootfs.tar.gz"
 else
-    err "rootfs.tar.gz が見つかりません。IMAGE_FSTYPES に tar.gz が含まれているか確認してください。"
+    # ── フォールバック: wic からマウントなしで tar.gz を生成 ──────────────────
+    # IMAGE_FSTYPES に tar.gz を指定済みだが、キャッシュヒット等で生成されなかった場合の保険。
+    # losetup/mount は使わず、fdisk でオフセットを計算して dd で rawに切り出す。
+    warn "tar.gz が見つかりません。wic から tar.gz を生成します（マウントなし）。"
+    WIC_FILE=$(find "${DEPLOY_DIR}" -name "*rootfs*.wic" ! -name "*.bmap" 2>/dev/null | head -1 || true)
+    if [[ -z "${WIC_FILE}" ]]; then
+        err "rootfs.tar.gz も .wic も見つかりません。ビルドログを確認してください。"
+    fi
+
+    log "対象 wic: ${WIC_FILE}"
+
+    # fdisk で rootfs パーティション（最終パーティション = 最大オフセットのもの）を特定
+    # 出力例: /dev/sda2  *  2048  1050623  1048576  512M  83  Linux
+    # wic は通常 p1=EFI(vfat), p2=rootfs(ext4) の2パーティション構成
+    SECTOR_SIZE=512
+    FDISK_OUT=$(fdisk -l "${WIC_FILE}" 2>/dev/null)
+    log "fdisk 出力:
+${FDISK_OUT}"
+
+    # 最終行のパーティション = rootfs（最大スタートセクタ）
+    PART_LINE=$(echo "${FDISK_OUT}" | awk '/^[^ ]*[0-9]/{print}' | sort -k2 -n | tail -1)
+    START_SECTOR=$(echo "${PART_LINE}" | awk '{print $2}')
+    TOTAL_SECTORS=$(echo "${PART_LINE}" | awk '{print $4}')
+
+    if [[ -z "${START_SECTOR}" || -z "${TOTAL_SECTORS}" ]]; then
+        err "wic のパーティション情報を取得できませんでした。fdisk 出力を確認してください。"
+    fi
+
+    OFFSET=$(( START_SECTOR * SECTOR_SIZE ))
+    SIZE=$(( TOTAL_SECTORS * SECTOR_SIZE ))
+    log "rootfs パーティション: start=${START_SECTOR} sectors, size=${TOTAL_SECTORS} sectors"
+    log "dd オフセット: ${OFFSET} bytes, サイズ: ${SIZE} bytes"
+
+    # dd で rootfs パーティション（ext4 raw）を切り出し
+    RAW_EXT4=$(mktemp /tmp/rootfs_XXXXXX.ext4)
+    dd if="${WIC_FILE}" of="${RAW_EXT4}"         bs="${SECTOR_SIZE}" skip="${START_SECTOR}" count="${TOTAL_SECTORS}"         status=progress 2>&1 | tail -3
+
+    # ext4 raw → tar.gz（debugfs でマウントなし展開）
+    log "debugfs で ext4 → tar.gz に変換中..."
+    ROOTFS_TMP=$(mktemp -d /tmp/rootfs_extract_XXXXXX)
+    debugfs -R "rdump / ${ROOTFS_TMP}" "${RAW_EXT4}" 2>/dev/null
+    tar -czf "/${WS}/yocto-rootfs.tar.gz" -C "${ROOTFS_TMP}" .
+    rm -rf "${ROOTFS_TMP}" "${RAW_EXT4}"
+
+    log "rootfs → /${WS}/yocto-rootfs.tar.gz (wic から生成、マウントなし)"
 fi
 
 # 全成果物をコピー (.manifest / .json を除く)
