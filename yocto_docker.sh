@@ -666,6 +666,8 @@ else
     # IMAGE_FSTYPES に tar.gz を指定済みだが、キャッシュヒット等で生成されなかった場合の保険。
     # ※ 旧実装の debugfs rdump はシンボリックリンクや特殊ファイルをスキップし
     #    etc/ 以下が欠落する問題があったため、losetup + mount 方式に変更。
+    # ※ --partscan はコンテナ内カーネルが /dev/loopNpX を作らない場合があるため、
+    #    オフセット直接指定方式（losetup --offset）を採用。udevd/partprobe 不要。
     warn "tar.gz が見つかりません。wic から tar.gz を生成します（losetup + mount）。"
     WIC_FILE=$(find "${DEPLOY_DIR}" -name "*rootfs*.wic" ! -name "*.bmap" 2>/dev/null | head -1 || true)
     if [[ -z "${WIC_FILE}" ]]; then
@@ -674,32 +676,82 @@ else
 
     log "対象 wic: ${WIC_FILE}"
 
-    # losetup でループデバイスにアタッチ（--partscan で全パーティションを自動認識）
-    LOOP_DEV=$(sudo losetup --find --show --partscan "${WIC_FILE}")
-    log "ループデバイス: ${LOOP_DEV}"
+    # ── パーティションオフセットを python3 で解析（GPT / MBR 両対応）─────────
+    # x86_64 wic は GPT フォーマット。python3 で GPT ヘッダを直接読み
+    # 2番目のパーティション（rootfs）のバイトオフセットとサイズを取得する。
+    _WIC_PARSE_SCRIPT=$(mktemp /tmp/wic_parse_XXXXXX.py)
+    cat > "${_WIC_PARSE_SCRIPT}" << 'PYEOF'
+import sys, struct
 
-    # パーティション命名規則: /dev/loopNp1, /dev/loopNp2, ...
-    # x86_64 wic: p1=EFI(vfat), p2=rootfs(ext4)
-    # rpi wic   : p1=boot(vfat), p2=rootfs(ext4)
-    LOOP_PART="${LOOP_DEV}p2"
+SECTOR = 512
 
-    # パーティションデバイスが現れるまで最大5秒待機（udevd の遅延対策）
-    for _i in 1 2 3 4 5; do
-        [[ -b "${LOOP_PART}" ]] && break
-        sleep 1
-    done
-    if [[ ! -b "${LOOP_PART}" ]]; then
-        sudo losetup -d "${LOOP_DEV}" 2>/dev/null || true
-        err "rootfsパーティション ${LOOP_PART} が見つかりません。wic の構造を確認してください。"
+with open(sys.argv[1], "rb") as f:
+    f.seek(SECTOR)
+    gpt_header = f.read(92)
+    if gpt_header[:8] == b"EFI PART":
+        part_entry_lba = struct.unpack_from("<Q", gpt_header, 72)[0]
+        num_entries    = struct.unpack_from("<I", gpt_header, 80)[0]
+        entry_size     = struct.unpack_from("<I", gpt_header, 84)[0]
+        f.seek(part_entry_lba * SECTOR)
+        entries = []
+        for _ in range(num_entries):
+            entry = f.read(entry_size)
+            if entry[:16] == b"\x00" * 16:
+                continue
+            s = struct.unpack_from("<Q", entry, 32)[0]
+            e = struct.unpack_from("<Q", entry, 40)[0]
+            if s > 0:
+                entries.append((s, e))
+        entries.sort(key=lambda x: x[0])
+        # 2番目=rootfs (1番目はEFI/boot)
+        s, e = entries[1] if len(entries) >= 2 else entries[0] if entries else (0, 0)
+        print(s * SECTOR, (e - s + 1) * SECTOR)
+    else:
+        f.seek(0)
+        mbr = f.read(SECTOR)
+        parts = []
+        for i in range(4):
+            e = mbr[446 + i*16: 446 + i*16 + 16]
+            start = struct.unpack_from("<I", e, 8)[0]
+            size  = struct.unpack_from("<I", e, 12)[0]
+            if start > 0 and size > 0:
+                parts.append((start, size))
+        parts.sort(key=lambda x: x[0])
+        s, sz = parts[1] if len(parts) >= 2 else parts[0] if parts else (0, 0)
+        print(s * SECTOR, sz * SECTOR)
+PYEOF
+
+    read -r ROOTFS_OFFSET_BYTES ROOTFS_SIZE_BYTES < <(python3 "${_WIC_PARSE_SCRIPT}" "${WIC_FILE}")
+    rm -f "${_WIC_PARSE_SCRIPT}"
+
+    if [[ -z "${ROOTFS_OFFSET_BYTES}" || "${ROOTFS_OFFSET_BYTES}" == "0" ]]; then
+        err "wic のパーティション情報を取得できませんでした。wic ファイルが壊れていないか確認してください。"
     fi
+    log "rootfs パーティション: offset=${ROOTFS_OFFSET_BYTES} bytes, size=${ROOTFS_SIZE_BYTES} bytes"
+
+    # ── losetup でオフセット直接指定してマウント ─────────────────────────────
+    # rootfs パーティションだけを単一ループデバイスとして見せることで
+    # /dev/loopNpX に依存せず Docker コンテナ内でも確実に動作する。
+    LOOP_DEV=$(sudo losetup --find --show \
+        --offset "${ROOTFS_OFFSET_BYTES}" \
+        --sizelimit "${ROOTFS_SIZE_BYTES}" \
+        "${WIC_FILE}")
+    log "ループデバイス: ${LOOP_DEV} (rootfs パーティション直接マウント)"
 
     ROOTFS_TMP=$(mktemp -d /tmp/rootfs_extract_XXXXXX)
-    # 読み取り専用マウント（wicを破壊しない）
-    sudo mount -o ro "${LOOP_PART}" "${ROOTFS_TMP}"
+    sudo mount -o ro "${LOOP_DEV}" "${ROOTFS_TMP}"
+
+    # etc/ が存在するか事前確認（マウント成功・オフセット正常の確認）
+    if [[ ! -d "${ROOTFS_TMP}/etc" ]]; then
+        sudo umount "${ROOTFS_TMP}"
+        sudo losetup -d "${LOOP_DEV}"
+        rm -rf "${ROOTFS_TMP}"
+        err "マウントした rootfs に etc/ が存在しません。パーティションオフセットを確認してください。"
+    fi
 
     log "tar.gz 生成中 (${ROOTFS_TMP} → /${WS}/yocto-rootfs.tar.gz) ..."
     # --numeric-owner: morning.sh 側の展開オプションと合わせる
-    # sudo: rootfs内にroot所有ファイルが存在するため権限昇格が必要
+    # sudo: rootfs 内に root 所有ファイルが存在するため権限昇格が必要
     sudo tar -czf "/${WS}/yocto-rootfs.tar.gz" \
         -C "${ROOTFS_TMP}" \
         --numeric-owner \
