@@ -142,7 +142,9 @@ if [[ -f "${DONE_FLAG}" ]]; then
     sudo mkdir -p "${OUTPUT_DIR}"
     sudo chmod 777 "${OUTPUT_DIR}"
     _resolve_target  # MACHINE を確定させる
-    DEPLOY_DIR="/${WS}/tmp/deploy/images/${MACHINE}"
+    # TMPDIR=BUILD_DIR/tmp, TCLIBCAPPEND="" で固定しているため常にこのパスを参照する
+    BUILD_DIR_SKIP="/${WS}/build_yocto"
+    DEPLOY_DIR="${BUILD_DIR_SKIP}/tmp/deploy/images/${MACHINE}"
     if [[ -d "${DEPLOY_DIR}" ]]; then
         WIC_FILE=$(find "${DEPLOY_DIR}" \( -name "*.wic.gz" -o -name "*.wic.bz2" \) 2>/dev/null | head -1 || true)
         TAR_FILE=$(find "${DEPLOY_DIR}" -name "*rootfs*.tar.gz" 2>/dev/null | head -1 || true)
@@ -518,20 +520,33 @@ MIRROREOF
     echo "BB_FETCH_RETRIES = \"${FETCH_RETRIES}\"" >> "${LOCAL_CONF}"
     log "BB_FETCH_RETRIES = ${FETCH_RETRIES}"
 
-    # ── ダウンロード・sstate キャッシュ ──────────────────────────────────────
+    # ── ダウンロード・sstate キャッシュ・TMPDIR ──────────────────────────────
     # Step7(oe-init-build-env 後)ではなくここで設定することで、
     # local.conf への追記を1箇所に集約し再実行時の重複を防ぐ。
+    #
+    # 【TMPDIR 設計】
+    #   Yocto の DISTRO (openembedded-core) は TCLIBCAPPEND="-glibc" を付けて
+    #   TMPDIR を "<BUILD_DIR>/tmp-glibc" に自動リダイレクトする。
+    #   local.conf で TMPDIR を BUILD_DIR 外 (例: /build/tmp) に設定すると、
+    #   実際の出力先は /build/tmp-glibc になり、Step8 の find が空振りする。
+    #
+    #   根本修正:
+    #     1. TMPDIR を BUILD_DIR 内の "tmp" に設定する。
+    #     2. TCLIBCAPPEND = "" で "-glibc" サフィックスを無効化する。
+    #   これにより実際の出力先が TMPDIR = BUILD_DIR/tmp に固定され、
+    #   Step8 の DEPLOY_DIR 検索が常に正しく機能する。
     local DL_DIR_CFG="/${WS}/downloads"
     local SSTATE_DIR_CFG="/${WS}/sstate-cache"
-    local TMPDIR_CFG="/${WS}/tmp"
+    local TMPDIR_CFG="${BUILD_DIR}/tmp"
     sudo mkdir -p "${DL_DIR_CFG}" "${SSTATE_DIR_CFG}" "${TMPDIR_CFG}"
     sudo chmod 777 "${DL_DIR_CFG}" "${SSTATE_DIR_CFG}" "${TMPDIR_CFG}"
     echo "DL_DIR = \"${DL_DIR_CFG}\""         >> "${LOCAL_CONF}"
     echo "SSTATE_DIR = \"${SSTATE_DIR_CFG}\""  >> "${LOCAL_CONF}"
     echo "TMPDIR = \"${TMPDIR_CFG}\""          >> "${LOCAL_CONF}"
+    echo "TCLIBCAPPEND = \"\""                 >> "${LOCAL_CONF}"
     log "DL_DIR    = ${DL_DIR_CFG}"
     log "SSTATE_DIR= ${SSTATE_DIR_CFG}"
-    log "TMPDIR    = ${TMPDIR_CFG}"
+    log "TMPDIR    = ${TMPDIR_CFG} (TCLIBCAPPEND=\"\" でサフィックス無効化)"
 
     log "local.conf のカスタマイズ完了"
 }
@@ -626,7 +641,9 @@ fi
 # ─────────────────────────────────────────────
 step "8. 成果物コピー"
 
-DEPLOY_DIR="/${WS}/tmp/deploy/images/${MACHINE}"
+# TMPDIR = BUILD_DIR/tmp, TCLIBCAPPEND="" で固定しているため
+# DEPLOY_DIR は常に BUILD_DIR/tmp/deploy/images/${MACHINE} になる。
+DEPLOY_DIR="${BUILD_DIR}/tmp/deploy/images/${MACHINE}"
 OUTPUT_DIR="/${WS}/images"
 sudo mkdir -p "${OUTPUT_DIR}"
 sudo chmod 777 "${OUTPUT_DIR}"
