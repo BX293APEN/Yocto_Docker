@@ -22,7 +22,7 @@
 #   3. GPT + EFI + rootfs パーティション作成
 #   4. rootfs 展開
 #   5. fstab 設定
-#   6. パーティション拡張(--size 指定時)
+#   6. アンマウント
 # =============================================================================
 
 set -euo pipefail
@@ -70,6 +70,7 @@ if [[ -f "${ENV_FILE}" ]]; then
     [[ -n "${_ws}" ]] && WS="${_ws}"
 fi
 
+# コマンドライン引数は .env より優先
 [[ -n "${_CLI_SIZE_MB}" ]] && USB_SIZE_MB="${_CLI_SIZE_MB}"
 
 if ! [[ "${USB_SIZE_MB}" =~ ^[0-9]+$ ]]; then
@@ -138,15 +139,21 @@ lsblk -po NAME,SIZE,LABEL,MOUNTPOINT | grep -E '^(/dev/sd|/dev/nvme|/dev/mmcblk)
     lsblk -po NAME,SIZE,LABEL,MOUNTPOINT | grep -v "^NAME"
 
 echo ""
-read -rp "書き込み先デバイスを入力してください (例: /dev/sdb): " TARGET_DEV
+case "${DEVICE_PROFILE}" in
+    rpi*)  echo -n "microSD / USB デバイス (例: sdb または /dev/sdb または mmcblk0): " ;;
+    *)     echo -n "USB デバイス (例: sdb または /dev/sdb): " ;;
+esac
+read -r INPUT
 
-[[ "${TARGET_DEV}" =~ ^/dev/ ]] || err "デバイスパスは /dev/ から始まる必要があります"
-[[ -b "${TARGET_DEV}" ]]        || err "ブロックデバイスが見つかりません: ${TARGET_DEV}"
+# /dev/ 付きでも無しでもOK
+TARGET_DEV="/dev/${INPUT#/dev/}"
 
-# ルートデバイスへの書き込みを防止
-ROOT_DEV=$(lsblk -no PKNAME "$(findmnt -n -o SOURCE /)" 2>/dev/null | head -1 || true)
-if [[ -n "${ROOT_DEV}" && "${TARGET_DEV}" == *"${ROOT_DEV}"* ]]; then
-    err "危険！ルートデバイスへの書き込みは禁止されています: ${TARGET_DEV}"
+[[ -b "${TARGET_DEV}" ]] || err "${TARGET_DEV} が見つかりません。lsblk でデバイス名を確認してください。"
+
+# 安全確認: ルートデバイスへの書き込みを防止
+ROOT_DEV=$(findmnt -n -o SOURCE / | sed 's/[0-9]*$//' | sed 's/p[0-9]*$//')
+if [[ "${TARGET_DEV}" == "${ROOT_DEV}" ]]; then
+    err "危険！ルートデバイス (${ROOT_DEV}) への書き込みは禁止されています。"
 fi
 
 DEVICE_SIZE=$(lsblk -dno SIZE "${TARGET_DEV}" 2>/dev/null || echo "不明")
@@ -157,6 +164,11 @@ echo "  ⚠️  警告: ${TARGET_DEV} の全データが消去されます！"
 echo "  デバイス : ${TARGET_DEV}"
 echo "  サイズ   : ${DEVICE_SIZE}"
 echo "  rootfs   : ${ROOTFS_TAR}"
+if [[ "${USB_SIZE_MB}" -eq 0 ]]; then
+    echo "  rootfs容量: デバイス全容量(制限なし)"
+else
+    echo "  rootfs容量: ${USB_SIZE_MB} MB に制限"
+fi
 echo "========================================================"
 read -rp "本当に続行しますか？ (yes と入力して Enter): " FINAL_CONFIRM
 [[ "${FINAL_CONFIRM}" == "yes" ]] || { echo "中止しました。"; exit 0; }
@@ -165,12 +177,13 @@ read -rp "本当に続行しますか？ (yes と入力して Enter): " FINAL_CO
 # 2. デバイスのアンマウント
 # ─────────────────────────────────────────────
 log "マウント済みパーティションをアンマウントします"
-while IFS= read -r part; do
-    if mountpoint -q "${part}" 2>/dev/null; then
-        log "アンマウント: ${part}"
-        umount "${part}" || warn "アンマウントに失敗: ${part}"
+for part in "${TARGET_DEV}"?* "${TARGET_DEV}"; do
+    [[ -b "$part" ]] || continue
+    mp=$(lsblk -no MOUNTPOINT "$part" 2>/dev/null || true)
+    if [[ -n "$mp" ]]; then
+        umount "$mp" && log "  アンマウント: $part ($mp)"
     fi
-done < <(lsblk -lnpo NAME "${TARGET_DEV}" | tail -n +2)
+done
 
 # ─────────────────────────────────────────────
 # 3. パーティションテーブル作成 (GPT + EFI + rootfs)
@@ -194,7 +207,7 @@ sleep 1
 # パーティションデバイス名の解決 (/dev/sdb1 or /dev/mmcblk0p1)
 PART1="${TARGET_DEV}1"
 PART2="${TARGET_DEV}2"
-if [[ ! -b "${PART1}" ]]; then
+if [[ "${TARGET_DEV}" =~ (nvme|mmcblk) ]]; then
     PART1="${TARGET_DEV}p1"
     PART2="${TARGET_DEV}p2"
 fi
@@ -255,6 +268,23 @@ log "✅ USB書き込み完了！"
 echo ""
 echo "  デバイス: ${TARGET_DEV}"
 echo "  rootfs  : ${ROOTFS_TAR}"
+echo ""
+
+case "${DEVICE_PROFILE}" in
+    x86_64)
+        echo "次のステップ:"
+        echo "  1. USB を抜いてターゲットPCに差す"
+        echo "  2. BIOS/UEFI の Boot Order を USB 優先に設定"
+        echo "  3. 起動！"
+        ;;
+    rpi*)
+        echo "次のステップ:"
+        echo "  1. microSD / USB を抜いてラズパイに差す"
+        echo "  2. 電源ON"
+        echo "  3. しばらく待つと起動します(初回は少し時間がかかります)"
+        ;;
+esac
+
 echo ""
 echo "  USB を安全に取り外してから起動してください。"
 echo "============================================"
