@@ -27,6 +27,8 @@ DEVICE_PROFILE="${DEVICE_PROFILE:-x86_64}"
 CPU_CORE="${CPU_CORE:-4}"
 WS="${WS:-build}"
 EXTRA_PACKAGES="${EXTRA_PACKAGES:-}"
+# "name,url[,branch] name,url[,branch] ..." 形式
+EXTRA_LAYERS="${EXTRA_LAYERS:-}"
 
 # ── systemd ──
 USE_SYSTEMD="${USE_SYSTEMD:-false}"
@@ -155,22 +157,56 @@ fi
 # ─────────────────────────────────────────────
 step "2. 追加レイヤー取得"
 
+# DEVICE_PROFILE 由来のレイヤーと .env の EXTRA_LAYERS を統合する
+# _LAYERS_TO_CLONE は "name,url[,branch]" のスペース区切りリスト
+_LAYERS_TO_CLONE=""
+
+# DEVICE_PROFILE 由来 (例: meta-raspberrypi)
 if [[ -n "${EXTRA_LAYER}" && -n "${EXTRA_LAYER_REPO}" ]]; then
-    LAYER_DIR="/${WS}/${EXTRA_LAYER}"
-    if [[ -d "${LAYER_DIR}/.git" ]]; then
-        log "${EXTRA_LAYER} が既に存在します。スキップします。"
-    else
-        log "${EXTRA_LAYER} を clone します"
-        git clone --depth 1 \
-            --branch "${YOCTO_RELEASE}" \
-            "${EXTRA_LAYER_REPO}" \
-            "${LAYER_DIR}" || \
-        git clone --depth 1 \
-            "${EXTRA_LAYER_REPO}" \
-            "${LAYER_DIR}"
-    fi
-else
+    _LAYERS_TO_CLONE="${EXTRA_LAYER},${EXTRA_LAYER_REPO}"
+fi
+
+# .env の EXTRA_LAYERS を追記
+if [[ -n "${EXTRA_LAYERS}" ]]; then
+    _LAYERS_TO_CLONE="${_LAYERS_TO_CLONE} ${EXTRA_LAYERS}"
+fi
+
+# 重複除去しつつクローン
+_SEEN_LAYERS=""
+if [[ -z "${_LAYERS_TO_CLONE// /}" ]]; then
     log "追加レイヤーなし。スキップします。"
+else
+    for _LAYER_ENTRY in ${_LAYERS_TO_CLONE}; do
+        # "name,url" または "name,url,branch" に分解
+        _LAYER_NAME=$(echo "${_LAYER_ENTRY}" | cut -d',' -f1)
+        _LAYER_URL=$(echo  "${_LAYER_ENTRY}" | cut -d',' -f2)
+        _LAYER_BRANCH=$(echo "${_LAYER_ENTRY}" | cut -d',' -f3)
+        _LAYER_BRANCH="${_LAYER_BRANCH:-${YOCTO_RELEASE}}"
+
+        # 空エントリのスキップ
+        [[ -z "${_LAYER_NAME}" || -z "${_LAYER_URL}" ]] && continue
+
+        # 重複スキップ
+        if echo "${_SEEN_LAYERS}" | grep -qw "${_LAYER_NAME}"; then
+            log "${_LAYER_NAME} は既にキュー済みです。スキップします。"
+            continue
+        fi
+        _SEEN_LAYERS="${_SEEN_LAYERS} ${_LAYER_NAME}"
+
+        LAYER_DIR="/${WS}/${_LAYER_NAME}"
+        if [[ -d "${LAYER_DIR}/.git" ]]; then
+            log "${_LAYER_NAME} が既に存在します。スキップします。"
+        else
+            log "${_LAYER_NAME} を clone します (branch: ${_LAYER_BRANCH})"
+            git clone --depth 1 \
+                --branch "${_LAYER_BRANCH}" \
+                "${_LAYER_URL}" \
+                "${LAYER_DIR}" || \
+            git clone --depth 1 \
+                "${_LAYER_URL}" \
+                "${LAYER_DIR}"
+        fi
+    done
 fi
 
 # ─────────────────────────────────────────────
@@ -353,6 +389,26 @@ VIRTUAL-RUNTIME_initscripts = ""
 SYSTEMDEOF
     fi
 
+    # ネットワーク設定 (systemd-networkd はDISTRO_FEATURES:systemdが必要)
+    # EXTRA_PACKAGES に systemd-networkd / systemd-resolved が含まれている場合は
+    # 自動で DISTRO_FEATURES に systemd を追加する
+    local _pkgs_lower
+    _pkgs_lower=$(echo "${EXTRA_PACKAGES}" | tr '[:upper:]' '[:lower:]')
+    if echo "${_pkgs_lower}" | grep -qE 'systemd-networkd|systemd-resolved'; then
+        warn "EXTRA_PACKAGES に systemd-networkd/systemd-resolved が含まれています。"
+        warn "これらは DISTRO_FEATURES:systemd が有効でないとビルドできません。"
+        warn "USE_SYSTEMD=true を .env に設定することを推奨します。"
+        if ! grep -q "DISTRO_FEATURES.*systemd" "${LOCAL_CONF}"; then
+            cat >> "${LOCAL_CONF}" << 'SYSTEMDEOF'
+
+# systemd-networkd/resolved を EXTRA_PACKAGES で指定したため自動有効化
+DISTRO_FEATURES:append = " systemd"
+VIRTUAL-RUNTIME_init_manager = "systemd"
+VIRTUAL-RUNTIME_initscripts = ""
+SYSTEMDEOF
+        fi
+    fi
+
     log "local.conf のカスタマイズ完了"
 }
 _patch_local_conf
@@ -364,15 +420,35 @@ step "5. bblayers.conf 更新"
 
 BBLAYERS_CONF="${BUILD_DIR}/conf/bblayers.conf"
 
-if [[ -n "${EXTRA_LAYER}" ]]; then
-    LAYER_PATH="/${WS}/${EXTRA_LAYER}"
-    if ! grep -q "${LAYER_PATH}" "${BBLAYERS_CONF}"; then
-        log "bblayers.conf に ${EXTRA_LAYER} を追加します"
-        # BBLAYERS += の末尾に追加
-        sed -i "s|^\(BBLAYERS ?= \"\)|BBLAYERS ?= \"\\\n  ${LAYER_PATH} \\\\\n\"|" "${BBLAYERS_CONF}" || \
-            echo "  ${LAYER_PATH} \\" >> "${BBLAYERS_CONF}"
+_register_layer_to_bblayers() {
+    local layer_name="$1"
+    local layer_path="/${WS}/${layer_name}"
+
+    [[ -z "${layer_name}" ]] && return
+
+    if [[ ! -d "${layer_path}" ]]; then
+        warn "レイヤーディレクトリが存在しません: ${layer_path} (スキップ)"
+        return
     fi
-fi
+
+    if grep -q "${layer_path}" "${BBLAYERS_CONF}"; then
+        log "${layer_name} は既に bblayers.conf に登録済みです。"
+        return
+    fi
+
+    log "bblayers.conf に ${layer_name} を追加します"
+    # BBLAYERS 変数の末尾行 (閉じダブルクォート) の直前に行を挿入
+    sed -i "s|\"$|  ${layer_path} \\\\\n\"|" "${BBLAYERS_CONF}"
+}
+
+# DEVICE_PROFILE 由来のレイヤーを登録
+[[ -n "${EXTRA_LAYER}" ]] && _register_layer_to_bblayers "${EXTRA_LAYER}"
+
+# EXTRA_LAYERS を登録
+for _LAYER_ENTRY in ${EXTRA_LAYERS}; do
+    _LAYER_NAME=$(echo "${_LAYER_ENTRY}" | cut -d',' -f1)
+    [[ -n "${_LAYER_NAME}" ]] && _register_layer_to_bblayers "${_LAYER_NAME}"
+done
 
 # ─────────────────────────────────────────────
 # 6. rootfs カスタマイズの確認ログ

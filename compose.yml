@@ -39,6 +39,8 @@ services:
       - WS=${WS}
       - CPU_CORE=${CPU_CORE}
       - EXTRA_PACKAGES=${EXTRA_PACKAGES}
+      # ── 追加レイヤー ──
+      - EXTRA_LAYERS=${EXTRA_LAYERS}
       # ── ネットワーク設定 ──
       - NETWORK_PROTO=${NETWORK_PROTO}
       - STATIC_IP=${STATIC_IP}
