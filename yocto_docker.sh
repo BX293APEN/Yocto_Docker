@@ -7,7 +7,7 @@
 #   2. 追加レイヤー (meta-raspberrypi 等) を必要に応じて追加
 #   3. local.conf / bblayers.conf をカスタマイズ
 #   4. bitbake <IMAGE> でビルド
-#   5. /build/yocto-image.wic.gz (またはimg.gz) を出力
+#   5. /build/yocto-rootfs.tar.gz を出力
 #
 # 設定は .env を編集してください。スクリプト本体は変更不要です。
 #
@@ -663,12 +663,8 @@ echo "============================================"
 log "✅ ビルド完了！"
 echo ""
 echo "  成果物ディレクトリ: /${WS}/images/"
-echo "  WICイメージ       : /${WS}/yocto-image.wic.gz"
 echo "  rootfs            : /${WS}/yocto-rootfs.tar.gz"
 echo ""
 echo "  USB書き込み:"
-echo "    gunzip -c yocto-image.wic.gz | sudo dd of=/dev/sdX bs=4M status=progress && sync"
-echo ""
-echo "  または:"
 echo "    sudo bash morning.sh"
 echo "============================================"
