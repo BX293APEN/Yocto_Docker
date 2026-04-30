@@ -7,31 +7,40 @@
 #
 # オプション:
 #   -o <path>  出力imgファイル名 (デフォルト: ./build/yocto.img)
-#   -s <size>  imgサイズ MB単位 (デフォルト: 2048)
+#   -s <MB>    imgサイズ MB単位  (デフォルト: 2048)
+#   -t <path>  rootfs.tar.gz のパス (デフォルト: ./build/yocto-rootfs.tar.gz)
 #   -h         このヘルプを表示
 #
-# 依存コマンド: dd, parted, mkfs.vfat, mkfs.ext4, losetup, mount, tar
+# 依存コマンド: dd, parted, mkfs.vfat, mkfs.ext4, losetup, mount, tar, blkid
 #
-# 生成されたimgはそのままUSBに書き込める:
+# 生成された img はそのまま USB に書き込めます:
 #   sudo dd if=yocto.img of=/dev/sdX bs=4M status=progress && sync
-#
-# 注意: Yocto の WIC イメージが存在する場合はそちらの使用を推奨します。
-#       rootfs.tar.gz からカスタム構成でイメージを作りたい場合に使用してください。
+#   または: sudo bash morning.sh
 # =============================================================================
 
 set -euo pipefail
 
 # ─────────────────────────────────────────────
+# .env からWSを読む（パス解決に使用）
+# ─────────────────────────────────────────────
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ENV_FILE="${SCRIPT_DIR}/.env"
+WS="build"
+if [[ -f "${ENV_FILE}" ]]; then
+    _ws=$(grep -E '^WS=' "${ENV_FILE}" | tail -1 | cut -d= -f2 | tr -d '"'"'" | xargs 2>/dev/null || true)
+    [[ -n "${_ws}" ]] && WS="${_ws}"
+fi
+BUILD_DIR="${SCRIPT_DIR}/${WS}"
+
+# ─────────────────────────────────────────────
 # デフォルト設定
 # ─────────────────────────────────────────────
-ROOTFS_TAR="./build/yocto-rootfs.tar.gz"
-DONE_FLAG="./build/FLAGS/.build_done"
-OUTPUT_IMG="./build/yocto.img"
+ROOTFS_TAR="${BUILD_DIR}/yocto-rootfs.tar.gz"
+DONE_FLAG="${BUILD_DIR}/FLAGS/.build_done"
+OUTPUT_IMG="${BUILD_DIR}/yocto.img"
 IMG_SIZE_MB=2048
 MOUNT_ROOT="/mnt/yocto_img"
-LOGFILE="./build/tar2img.log"
-
-# EFI パーティション設定
+LOGFILE="${BUILD_DIR}/tar2img.log"
 EFI_SIZE_MB=100
 
 # ─────────────────────────────────────────────
@@ -42,10 +51,11 @@ usage() {
     exit 0
 }
 
-while getopts "o:s:h" opt; do
+while getopts "o:s:t:h" opt; do
     case $opt in
         o) OUTPUT_IMG="$OPTARG" ;;
         s) IMG_SIZE_MB="$OPTARG" ;;
+        t) ROOTFS_TAR="$OPTARG" ;;
         h) usage ;;
         *) usage ;;
     esac
@@ -54,8 +64,9 @@ done
 # ─────────────────────────────────────────────
 # ログ設定
 # ─────────────────────────────────────────────
-mkdir -p "$(dirname "$LOGFILE")"
-exec > >(tee -a "$LOGFILE") 2>&1
+mkdir -p "${BUILD_DIR}"
+chmod 777 "${BUILD_DIR}"
+exec > >(tee -a "${LOGFILE}") 2>&1
 
 log()  { echo "[INFO]  $(date '+%Y-%m-%d %H:%M:%S') $*"; }
 warn() { echo "[WARN]  $(date '+%Y-%m-%d %H:%M:%S') $*"; }
@@ -63,54 +74,47 @@ err()  { echo "[ERROR] $(date '+%Y-%m-%d %H:%M:%S') $*" >&2; exit 1; }
 
 echo "============================================"
 log "tar2img.sh 開始"
+echo "  rootfs  : ${ROOTFS_TAR}"
+echo "  出力    : ${OUTPUT_IMG}"
+echo "  サイズ  : ${IMG_SIZE_MB} MB"
 echo "============================================"
 
 # ─────────────────────────────────────────────
 # 0. 事前確認
 # ─────────────────────────────────────────────
-if [[ "$EUID" -ne 0 ]]; then
-    err "root権限が必要です: sudo bash tar2img.sh"
-fi
+[[ "$EUID" -eq 0 ]] || err "root権限が必要です: sudo bash tar2img.sh"
 
 for cmd in dd parted mkfs.vfat mkfs.ext4 losetup mount tar blkid; do
     command -v "$cmd" &>/dev/null || err "必要なコマンドが見つかりません: $cmd"
 done
 
-if [[ ! -f "$ROOTFS_TAR" ]]; then
-    err "${ROOTFS_TAR} が存在しません。ビルドが完了しているか確認してください。"
-fi
+[[ -f "${ROOTFS_TAR}" ]] || err "${ROOTFS_TAR} が存在しません。先に docker compose up --build -d でビルドしてください。"
 
-if [[ ! -f "$DONE_FLAG" ]]; then
-    warn "ビルド完了フラグ (${DONE_FLAG}) がありません。"
-    read -rp "  続行しますか？ (yes/no): " WARN_CONFIRM
-    [[ "$WARN_CONFIRM" == "yes" ]] || { echo "中止しました。"; exit 0; }
+if [[ ! -f "${DONE_FLAG}" ]]; then
+    warn "ビルド完了フラグ (${DONE_FLAG}) がありません。ビルドが中途半端かもしれません。"
+    read -rp "  続行しますか？ (yes/no): " _c
+    [[ "${_c}" == "yes" ]] || { echo "中止しました。"; exit 0; }
 fi
 
 echo ""
 echo "========================================================"
-echo "  出力ファイル : ${OUTPUT_IMG}"
-echo "  イメージサイズ: ${IMG_SIZE_MB} MB"
-echo "  rootfs      : ${ROOTFS_TAR}"
+echo "  rootfs    : ${ROOTFS_TAR}"
+echo "  出力img   : ${OUTPUT_IMG}"
+echo "  サイズ    : ${IMG_SIZE_MB} MB"
 echo "========================================================"
 read -rp "続行しますか？ (yes と入力して Enter): " CONFIRM
-[[ "$CONFIRM" == "yes" ]] || { echo "中止しました。"; exit 0; }
+[[ "${CONFIRM}" == "yes" ]] || { echo "中止しました。"; exit 0; }
 
 # ─────────────────────────────────────────────
-# ループデバイス管理
+# ループデバイスのクリーンアップ trap
 # ─────────────────────────────────────────────
 LOOP_DEV=""
 cleanup() {
     log "クリーンアップ中..."
     sync || true
-    if mountpoint -q "${MOUNT_ROOT}/boot/efi" 2>/dev/null; then
-        umount "${MOUNT_ROOT}/boot/efi" || true
-    fi
-    if mountpoint -q "${MOUNT_ROOT}" 2>/dev/null; then
-        umount "${MOUNT_ROOT}" || true
-    fi
-    if [[ -n "${LOOP_DEV}" ]] && losetup "${LOOP_DEV}" &>/dev/null; then
-        losetup -d "${LOOP_DEV}" || true
-    fi
+    mountpoint -q "${MOUNT_ROOT}/boot/efi" 2>/dev/null && umount "${MOUNT_ROOT}/boot/efi" || true
+    mountpoint -q "${MOUNT_ROOT}"          2>/dev/null && umount "${MOUNT_ROOT}"          || true
+    [[ -n "${LOOP_DEV}" ]] && losetup "${LOOP_DEV}" &>/dev/null && losetup -d "${LOOP_DEV}" || true
     log "クリーンアップ完了"
 }
 trap cleanup EXIT
@@ -119,7 +123,8 @@ trap cleanup EXIT
 # 1. イメージファイル作成
 # ─────────────────────────────────────────────
 log "1. イメージファイル作成 (${IMG_SIZE_MB} MB)"
-mkdir -p "$(dirname "$OUTPUT_IMG")"
+mkdir -p "$(dirname "${OUTPUT_IMG}")"
+chmod 777 "$(dirname "${OUTPUT_IMG}")"
 dd if=/dev/zero of="${OUTPUT_IMG}" bs=1M count="${IMG_SIZE_MB}" status=progress
 
 # ─────────────────────────────────────────────
@@ -139,10 +144,8 @@ log "3. ループデバイス設定"
 LOOP_DEV=$(losetup --find --show --partscan "${OUTPUT_IMG}")
 log "ループデバイス: ${LOOP_DEV}"
 
-# パーティション名の解決
 PART1="${LOOP_DEV}p1"
 PART2="${LOOP_DEV}p2"
-# loopXp1 が存在しない場合は loopXp1 → loop0p1 形式
 if [[ ! -b "${PART1}" ]]; then
     partprobe "${LOOP_DEV}" 2>/dev/null || true
     sleep 1
@@ -160,8 +163,9 @@ mkfs.ext4 -L    "rootfs"    "${PART2}"
 # ─────────────────────────────────────────────
 # 5. rootfs を展開
 # ─────────────────────────────────────────────
-log "5. rootfs 展開"
+log "5. rootfs 展開中 (時間がかかります)"
 mkdir -p "${MOUNT_ROOT}"
+chmod 777 "${MOUNT_ROOT}"
 mount "${PART2}" "${MOUNT_ROOT}"
 mkdir -p "${MOUNT_ROOT}/boot/efi"
 mount "${PART1}" "${MOUNT_ROOT}/boot/efi"
@@ -205,8 +209,7 @@ log "✅ イメージ作成完了！"
 echo "  出力: ${OUTPUT_IMG} (${IMG_ACTUAL_SIZE})"
 echo ""
 echo "  USB書き込み:"
-echo "    sudo dd if=${OUTPUT_IMG} of=/dev/sdX bs=4M status=progress && sync"
-echo ""
-echo "  または morning.sh を使用:"
 echo "    sudo bash morning.sh"
+echo "  または直接:"
+echo "    sudo dd if=${OUTPUT_IMG} of=/dev/sdX bs=4M status=progress && sync"
 echo "============================================"
