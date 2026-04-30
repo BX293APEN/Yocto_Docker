@@ -673,36 +673,43 @@ else
 
     log "対象 wic: ${WIC_FILE}"
 
-    # fdisk で rootfs パーティション（最終パーティション = 最大オフセットのもの）を特定
-    # 出力例: /dev/sda2  *  2048  1050623  1048576  512M  83  Linux
-    # wic は通常 p1=EFI(vfat), p2=rootfs(ext4) の2パーティション構成
+    # python3 で MBR を直接解析してパーティションオフセットを取得
+    # fdisk/parted は /sbin にあり非rootユーザーのPATHに含まれない場合があるため python3 で代替
     SECTOR_SIZE=512
-    FDISK_OUT=$(fdisk -l "${WIC_FILE}" 2>/dev/null)
-    log "fdisk 出力:
-${FDISK_OUT}"
+    read -r START_SECTOR TOTAL_SECTORS < <(python3 - "${WIC_FILE}" << 'PYEOF'
+import sys, struct
+with open(sys.argv[1], "rb") as f:
+    mbr = f.read(512)
+parts = []
+for i in range(4):
+    e = mbr[446 + i*16: 446 + i*16 + 16]
+    start = struct.unpack_from("<I", e, 8)[0]
+    size  = struct.unpack_from("<I", e, 12)[0]
+    if start > 0 and size > 0:
+        parts.append((start, size))
+parts.sort(key=lambda x: x[0])
+print(parts[-1][0], parts[-1][1])
+PYEOF
+)
 
-    # 最終行のパーティション = rootfs（最大スタートセクタ）
-    PART_LINE=$(echo "${FDISK_OUT}" | awk '/^[^ ]*[0-9]/{print}' | sort -k2 -n | tail -1)
-    START_SECTOR=$(echo "${PART_LINE}" | awk '{print $2}')
-    TOTAL_SECTORS=$(echo "${PART_LINE}" | awk '{print $4}')
-
-    if [[ -z "${START_SECTOR}" || -z "${TOTAL_SECTORS}" ]]; then
-        err "wic のパーティション情報を取得できませんでした。fdisk 出力を確認してください。"
+    if [[ -z "${START_SECTOR}" || -z "${TOTAL_SECTORS}" || "${START_SECTOR}" == "0" ]]; then
+        err "wic のパーティション情報を取得できませんでした。wic ファイルが壊れていないか確認してください。"
     fi
 
-    OFFSET=$(( START_SECTOR * SECTOR_SIZE ))
-    SIZE=$(( TOTAL_SECTORS * SECTOR_SIZE ))
     log "rootfs パーティション: start=${START_SECTOR} sectors, size=${TOTAL_SECTORS} sectors"
-    log "dd オフセット: ${OFFSET} bytes, サイズ: ${SIZE} bytes"
 
-    # dd で rootfs パーティション（ext4 raw）を切り出し
+    # dd で ext4 パーティションを raw ファイルとして切り出し
     RAW_EXT4=$(mktemp /tmp/rootfs_XXXXXX.ext4)
-    dd if="${WIC_FILE}" of="${RAW_EXT4}"         bs="${SECTOR_SIZE}" skip="${START_SECTOR}" count="${TOTAL_SECTORS}"         status=progress 2>&1 | tail -3
+    dd if="${WIC_FILE}" of="${RAW_EXT4}" \
+        bs="${SECTOR_SIZE}" skip="${START_SECTOR}" count="${TOTAL_SECTORS}" \
+        status=progress 2>&1 | tail -3
 
-    # ext4 raw → tar.gz（debugfs でマウントなし展開）
+    # debugfs (e2fsprogs) でマウントなし展開 → tar.gz
+    # /sbin/debugfs をフルパス指定して PATH 問題を回避、なければ PATH 経由でフォールバック
     log "debugfs で ext4 → tar.gz に変換中..."
     ROOTFS_TMP=$(mktemp -d /tmp/rootfs_extract_XXXXXX)
-    debugfs -R "rdump / ${ROOTFS_TMP}" "${RAW_EXT4}" 2>/dev/null
+    DEBUGFS_CMD=$(command -v /sbin/debugfs || command -v debugfs)
+    "${DEBUGFS_CMD}" -R "rdump / ${ROOTFS_TMP}" "${RAW_EXT4}" 2>/dev/null
     tar -czf "/${WS}/yocto-rootfs.tar.gz" -C "${ROOTFS_TMP}" .
     rm -rf "${ROOTFS_TMP}" "${RAW_EXT4}"
 
