@@ -57,6 +57,10 @@ services:
       - ROOT_PASSWORD=${ROOT_PASSWORD}
       # ── systemd ──
       - USE_SYSTEMD=${USE_SYSTEMD}
+      # ── ソースミラー ──
+      - PREMIRRORS=${PREMIRRORS}
+      - MIRRORS=${MIRRORS}
+      - FETCH_RETRIES=${FETCH_RETRIES}
 
     command:
       - /${ENTRY_DIR}/${ENTRY_POINT}

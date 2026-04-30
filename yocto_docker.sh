@@ -33,6 +33,14 @@ EXTRA_LAYERS="${EXTRA_LAYERS:-}"
 # ── systemd ──
 USE_SYSTEMD="${USE_SYSTEMD:-false}"
 
+# ── ソースミラー ──
+# スペース区切りで "元URL_パターン ミラーURL 元URL_パターン2 ミラーURL2 ..." と指定
+PREMIRRORS="${PREMIRRORS:-}"
+MIRRORS="${MIRRORS:-}"
+
+# ── フェッチリトライ回数 ──
+FETCH_RETRIES="${FETCH_RETRIES:-5}"
+
 # ── ネットワーク設定 ──
 NETWORK_PROTO="${NETWORK_PROTO:-dhcp}"
 STATIC_IP="${STATIC_IP:-}"
@@ -56,7 +64,7 @@ ROOT_PASSWORD="${ROOT_PASSWORD:-password}"
 # ─────────────────────────────────────────────
 LOGFILE="/${WS}/build.log"
 sudo mkdir -p "/${WS}"
-sudo chmod 777 -R "/${WS}"
+sudo chmod 777 "/${WS}"
 cd /${WS}
 exec > >(tee -a "${LOGFILE}") 2>&1
 
@@ -122,7 +130,7 @@ log "IMAGE         : ${IMAGE}"
 FLAGS_DIR="/${WS}/FLAGS"
 DONE_FLAG="${FLAGS_DIR}/.build_done"
 sudo mkdir -p "${FLAGS_DIR}"
-sudo chmod 777 -R "/${FLAGS_DIR}"
+sudo chmod 777 "/${FLAGS_DIR}"
 
 if [[ -f "${DONE_FLAG}" ]]; then
     log "ビルド完了フラグが存在します。スキップします。"
@@ -481,6 +489,79 @@ SYSTEMDEOF
     # wic用: rootfs.tar.gz 出力
     echo "IMAGE_FSTYPES:append = \" tar.gz\"" >> "${LOCAL_CONF}"
 
+    # ── ソースミラー設定 ─────────────────────────────────────────────────────
+    # .env の PREMIRRORS / MIRRORS を local.conf に書き込む。
+    # 書式: "パターン1 URL1 パターン2 URL2 ..." (スペース区切りペア)
+    # ヒアドキュメントは '' で変数展開を抑止し、プレースホルダーを sed で置換する。
+    # これにより、URL 内の特殊文字 (/ . * など) がシェル展開でバグるのを防ぐ。
+    _write_mirror_conf() {
+        local varname="$1"   # PREMIRRORS または MIRRORS
+        local raw="$2"       # スペース区切りの "パターン URL ..." 文字列
+        local conf_key="$3"  # local.conf に書くキー名
+
+        [[ -z "${raw// /}" ]] && return   # 空なら何もしない
+
+        # ガード: 既に同キーが書かれていたら追記しない（再実行対策）
+        if grep -q "^${conf_key}" "${LOCAL_CONF}"; then
+            log "${conf_key} は既に local.conf に設定済みです。スキップします。"
+            return
+        fi
+
+        # スペース区切りペア → "パターン URL \n" 形式の文字列を組み立てる
+        local entries=""
+        local token_arr=()
+        # bash 配列に分割
+        read -r -a token_arr <<< "${raw}"
+        local i=0
+        while [[ $i -lt ${#token_arr[@]} ]]; do
+            local pattern="${token_arr[$i]}"
+            local url="${token_arr[$((i+1))]}"
+            if [[ -z "${pattern}" || -z "${url}" ]]; then
+                warn "ミラー設定のペアが不完全です（パターン/URLが対になっていません）。スキップします: ${raw}"
+                return
+            fi
+            entries="${entries}${pattern} ${url} \\\n"
+            i=$((i+2))
+        done
+
+        log "${conf_key} を ${#token_arr[@]}/2 件設定します。"
+
+        # ヒアドキュメント（'' で変数展開を完全抑止）でテンプレートを書き出し、
+        # sed でプレースホルダーを実値に置換して local.conf に追記する。
+        local tmpfile
+        tmpfile=$(mktemp)
+        cat >> "${tmpfile}" << 'MIRROREOF'
+
+# __CONF_KEY__ (.env で設定)
+__CONF_KEY__ += "__ENTRIES__"
+MIRROREOF
+        # \n を実際の改行に変換しつつ sed 置換（| をデリミタにして / を安全に扱う）
+        local entries_expanded
+        entries_expanded=$(printf '%b' "${entries}")
+        # sed の置換文字列に含まれる & や \ をエスケープ
+        local entries_escaped
+        entries_escaped=$(printf '%s' "${entries_expanded}" | sed 's/[&\]/\\&/g')
+
+        sed \
+            -e "s|__CONF_KEY__|${conf_key}|g" \
+            -e "s|__ENTRIES__|${entries_escaped}|g" \
+            "${tmpfile}" >> "${LOCAL_CONF}"
+        rm -f "${tmpfile}"
+    }
+
+    _write_mirror_conf "PREMIRRORS" "${PREMIRRORS}" "PREMIRRORS"
+    _write_mirror_conf "MIRRORS"    "${MIRRORS}"    "MIRRORS"
+
+    # ── フェッチリトライ回数 ──────────────────────────────────────────────────
+    # BB_FETCH_RETRIES: ミラーを含む全フェッチ試行の最大リトライ回数。
+    # ミラーが不安定な場合に複数回試みることでフェッチ失敗を減らす。
+    if grep -q "^BB_FETCH_RETRIES" "${LOCAL_CONF}"; then
+        sed -i "s/^BB_FETCH_RETRIES.*/BB_FETCH_RETRIES = \"${FETCH_RETRIES}\"/" "${LOCAL_CONF}"
+    else
+        echo "BB_FETCH_RETRIES = \"${FETCH_RETRIES}\"" >> "${LOCAL_CONF}"
+    fi
+    log "BB_FETCH_RETRIES = ${FETCH_RETRIES}"
+
     log "local.conf のカスタマイズ完了"
 }
 _patch_local_conf
@@ -563,7 +644,14 @@ echo "DL_DIR = \"${DL_DIR}\""         >> "${LOCAL_CONF}"
 echo "SSTATE_DIR = \"${SSTATE_DIR}\"" >> "${LOCAL_CONF}"
 
 # ビルド実行
+# set -eo pipefail 環境では "bitbake | tee" のパイプ終了コードが
+# tee 側の SIGPIPE (exit 141) に汚染され、ビルド成功でも exit 1 になるバグがある。
+# PIPESTATUS[0] で bitbake 自身の終了コードを正確に取得して判定する。
 bitbake "${IMAGE}" 2>&1 | tee "/${WS}/bitbake.log"
+BITBAKE_EXIT=${PIPESTATUS[0]}
+if [[ ${BITBAKE_EXIT} -ne 0 ]]; then
+    err "bitbake が失敗しました (exit ${BITBAKE_EXIT})。/${WS}/bitbake.log を確認してください。"
+fi
 
 # ─────────────────────────────────────────────
 # 8. 成果物のコピーと整理
