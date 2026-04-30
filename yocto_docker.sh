@@ -366,9 +366,48 @@ NMEOF
     fi
 
     # ── ネットワーク設定 (systemd-networkd / NetworkManager 切り替え) ────────
-    if [[ "${_use_nm}" == "true" ]]; then
-        # NetworkManager が管理するため systemd-networkd の設定は書かない
-        log "ネットワーク設定は NetworkManager に委譲します。systemd-networkd 設定はスキップします。"
+    if [[ "${_use_nm}" == "true" && "${NETWORK_PROTO}" == "static" ]]; then
+        # NM + static: キーファイルを rootfs に直接生成
+        PREFIX=$(echo "${STATIC_NETMASK}" | awk -F. '{sum=0; for(i=1;i<=4;i++){n=$i; for(j=0;j<8;j++){sum+=and(n,1);n=rshift(n,1)}}; print sum}')
+        log "NetworkManager static IP 設定 (${STATIC_IP}/${PREFIX}) をキーファイルで生成します。"
+        cat >> "${CUSTOM_BBCLASS}" << 'NETEOF'
+
+configure_network () {
+    mkdir -p ${IMAGE_ROOTFS}/etc/NetworkManager/system-connections
+    cat > ${IMAGE_ROOTFS}/etc/NetworkManager/system-connections/eth0.nmconnection << EOF
+[connection]
+id=eth0
+type=ethernet
+interface-name=eth0
+autoconnect=true
+
+[ethernet]
+
+[ipv4]
+method=manual
+addresses=__STATIC_IP__/__PREFIX__
+gateway=__STATIC_GATEWAY__
+dns=__STATIC_DNS__
+
+[ipv6]
+method=ignore
+EOF
+    chmod 600 ${IMAGE_ROOTFS}/etc/NetworkManager/system-connections/eth0.nmconnection
+}
+
+ROOTFS_POSTPROCESS_COMMAND:append = " configure_network;"
+NETEOF
+        sed -i \
+            -e "s|__STATIC_IP__|${STATIC_IP}|g" \
+            -e "s|__PREFIX__|${PREFIX}|g" \
+            -e "s|__STATIC_GATEWAY__|${STATIC_GATEWAY}|g" \
+            -e "s|__STATIC_DNS__|${STATIC_DNS}|g" \
+            "${CUSTOM_BBCLASS}"
+
+    elif [[ "${_use_nm}" == "true" ]]; then
+        # NM + dhcp: NM デフォルトが DHCP のため設定ファイル不要
+        log "NetworkManager DHCP 設定。キーファイルは不要です (NM デフォルト動作)。"
+
     elif [[ "${NETWORK_PROTO}" == "static" ]]; then
         # サブネットマスク → プレフィックス長に変換
         PREFIX=$(echo "${STATIC_NETMASK}" | awk -F. '{sum=0; for(i=1;i<=4;i++){n=$i; for(j=0;j<8;j++){sum+=and(n,1);n=rshift(n,1)}}; print sum}')
