@@ -644,11 +644,15 @@ echo "DL_DIR = \"${DL_DIR}\""         >> "${LOCAL_CONF}"
 echo "SSTATE_DIR = \"${SSTATE_DIR}\"" >> "${LOCAL_CONF}"
 
 # ビルド実行
-# set -eo pipefail 環境では "bitbake | tee" のパイプ終了コードが
-# tee 側の SIGPIPE (exit 141) に汚染され、ビルド成功でも exit 1 になるバグがある。
-# PIPESTATUS[0] で bitbake 自身の終了コードを正確に取得して判定する。
+# 問題: set -eo pipefail 環境では "bitbake | tee" のパイプ失敗で bash が即 abort し、
+#       PIPESTATUS の代入行に到達できない。
+#       tee が SIGPIPE (exit 141) を返すだけでもビルド成功なのに落ちる。
+# 対策: パイプ実行中だけ set +e で -e を無効化し、PIPESTATUS[0] で
+#       bitbake 自身の終了コードを正確に取得してから判定する。
+set +e
 bitbake "${IMAGE}" 2>&1 | tee "/${WS}/bitbake.log"
 BITBAKE_EXIT=${PIPESTATUS[0]}
+set -e
 if [[ ${BITBAKE_EXIT} -ne 0 ]]; then
     err "bitbake が失敗しました (exit ${BITBAKE_EXIT})。/${WS}/bitbake.log を確認してください。"
 fi
