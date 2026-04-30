@@ -92,7 +92,7 @@ _resolve_target() {
             IMAGE="${IMAGE:-core-image-full-cmdline}"
             EXTRA_LAYER=""
             EXTRA_LAYER_REPO=""
-            IMAGE_FSTYPES_EXTRA="wic.gz wic.bmap"
+            IMAGE_FSTYPES_EXTRA="tar.gz"
             ;;
         rpi4)
             MACHINE="${MACHINE:-raspberrypi4-64}"
@@ -148,10 +148,13 @@ if [[ -f "${DONE_FLAG}" ]]; then
         -path "*/deploy/images/${MACHINE}" 2>/dev/null | head -1 || true)
     if [[ -n "${DEPLOY_DIR}" ]]; then
         log "DEPLOY_DIR = ${DEPLOY_DIR}"
-        WIC_FILE=$(find "${DEPLOY_DIR}" \( -name "*.wic.gz" -o -name "*.wic.bz2" \) 2>/dev/null | head -1 || true)
         TAR_FILE=$(find "${DEPLOY_DIR}" -name "*rootfs*.tar.gz" 2>/dev/null | head -1 || true)
-        [[ -n "${WIC_FILE}" ]] && cp -v "${WIC_FILE}" "/${WS}/yocto-image.wic.gz" && log "WICイメージ → /${WS}/yocto-image.wic.gz"
-        [[ -n "${TAR_FILE}" ]] && cp -v "${TAR_FILE}" "/${WS}/yocto-rootfs.tar.gz" && log "rootfs → /${WS}/yocto-rootfs.tar.gz"
+        if [[ -n "${TAR_FILE}" ]]; then
+            cp -v "${TAR_FILE}" "/${WS}/yocto-rootfs.tar.gz"
+            log "rootfs → /${WS}/yocto-rootfs.tar.gz"
+        else
+            warn "rootfs.tar.gz が見つかりません。"
+        fi
         find "${DEPLOY_DIR}" -maxdepth 1 -type f \
             ! -name "*.manifest" ! -name "*.json" \
             -exec cp -v {} "${OUTPUT_DIR}/" \; 2>/dev/null || true
@@ -472,9 +475,6 @@ SYSTEMDEOF
 EXTRA_IMAGE_FEATURES += "debug-tweaks"
 DEVEOF
 
-    # ── wic 用: rootfs.tar.gz を追加出力 ─────────────────────────────────────
-    echo 'IMAGE_FSTYPES:append = " tar.gz"' >> "${LOCAL_CONF}"
-
     # ── ソースミラー ──────────────────────────────────────────────────────────
     # .env の PREMIRRORS / MIRRORS をスペース区切りペアで指定する。
     # URL 内の特殊文字 (/ . *) がシェル展開でバグらないよう
@@ -655,23 +655,17 @@ OUTPUT_DIR="/${WS}/images"
 sudo mkdir -p "${OUTPUT_DIR}"
 sudo chmod 777 "${OUTPUT_DIR}"
 
-# wic.gz (x86_64) または wic.bz2 (rpi)
-WIC_FILE=$(find "${DEPLOY_DIR}" \( -name "*.wic.gz" -o -name "*.wic.bz2" \) 2>/dev/null | head -1 || true)
+# rootfs.tar.gz を /build/yocto-rootfs.tar.gz として配置 (morning.sh / tar2img.sh が参照)
 TAR_FILE=$(find "${DEPLOY_DIR}" -name "*rootfs*.tar.gz" 2>/dev/null | head -1 || true)
-
-if [[ -n "${WIC_FILE}" ]]; then
-    cp -v "${WIC_FILE}" "/${WS}/yocto-image.wic.gz"
-    log "WICイメージ → /${WS}/yocto-image.wic.gz"
-else
-    warn "WICイメージが見つかりません。"
-fi
 
 if [[ -n "${TAR_FILE}" ]]; then
     cp -v "${TAR_FILE}" "/${WS}/yocto-rootfs.tar.gz"
     log "rootfs → /${WS}/yocto-rootfs.tar.gz"
+else
+    err "rootfs.tar.gz が見つかりません。IMAGE_FSTYPES に tar.gz が含まれているか確認してください。"
 fi
 
-# 全成果物をコピー
+# 全成果物をコピー (.manifest / .json を除く)
 find "${DEPLOY_DIR}" -maxdepth 1 -type f \
     ! -name "*.manifest" \
     ! -name "*.json" \

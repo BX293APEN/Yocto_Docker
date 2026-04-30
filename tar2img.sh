@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# tar2img.sh  ―  Yocto rootfs.tar.gz をディスクイメージ (.img) に変換する
+# tar2img.sh  ―  yocto-rootfs.tar.gz をディスクイメージ (.img) に変換する
 #
 # 使い方:
 #   sudo bash tar2img.sh [オプション]
@@ -15,13 +15,12 @@
 #
 # 生成された img はそのまま USB に書き込めます:
 #   sudo dd if=yocto.img of=/dev/sdX bs=4M status=progress && sync
-#   または: sudo bash morning.sh
 # =============================================================================
 
 set -euo pipefail
 
 # ─────────────────────────────────────────────
-# .env からWSを読む（パス解決に使用）
+# .env からWSを読む
 # ─────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ENV_FILE="${SCRIPT_DIR}/.env"
@@ -36,7 +35,6 @@ BUILD_DIR="${SCRIPT_DIR}/${WS}"
 # デフォルト設定
 # ─────────────────────────────────────────────
 ROOTFS_TAR="${BUILD_DIR}/yocto-rootfs.tar.gz"
-DONE_FLAG="${BUILD_DIR}/FLAGS/.build_done"
 OUTPUT_IMG="${BUILD_DIR}/yocto.img"
 IMG_SIZE_MB=2048
 MOUNT_ROOT="/mnt/yocto_img"
@@ -90,12 +88,6 @@ done
 
 [[ -f "${ROOTFS_TAR}" ]] || err "${ROOTFS_TAR} が存在しません。先に docker compose up --build -d でビルドしてください。"
 
-if [[ ! -f "${DONE_FLAG}" ]]; then
-    warn "ビルド完了フラグ (${DONE_FLAG}) がありません。ビルドが中途半端かもしれません。"
-    read -rp "  続行しますか？ (yes/no): " _c
-    [[ "${_c}" == "yes" ]] || { echo "中止しました。"; exit 0; }
-fi
-
 echo ""
 echo "========================================================"
 echo "  rootfs    : ${ROOTFS_TAR}"
@@ -110,12 +102,10 @@ read -rp "続行しますか？ (yes と入力して Enter): " CONFIRM
 # ─────────────────────────────────────────────
 LOOP_DEV=""
 cleanup() {
-    log "クリーンアップ中..."
     sync || true
     mountpoint -q "${MOUNT_ROOT}/boot/efi" 2>/dev/null && umount "${MOUNT_ROOT}/boot/efi" || true
     mountpoint -q "${MOUNT_ROOT}"          2>/dev/null && umount "${MOUNT_ROOT}"          || true
     [[ -n "${LOOP_DEV}" ]] && losetup "${LOOP_DEV}" &>/dev/null && losetup -d "${LOOP_DEV}" || true
-    log "クリーンアップ完了"
 }
 trap cleanup EXIT
 
@@ -128,9 +118,9 @@ chmod 777 "$(dirname "${OUTPUT_IMG}")"
 dd if=/dev/zero of="${OUTPUT_IMG}" bs=1M count="${IMG_SIZE_MB}" status=progress
 
 # ─────────────────────────────────────────────
-# 2. パーティションテーブル作成 (GPT + EFI + rootfs)
+# 2. GPT + EFI + rootfs パーティション作成
 # ─────────────────────────────────────────────
-log "2. GPT パーティションテーブル作成"
+log "2. パーティションテーブル作成 (GPT: EFI ${EFI_SIZE_MB}MiB + rootfs)"
 parted -s "${OUTPUT_IMG}" \
     mklabel gpt \
     mkpart ESP fat32 1MiB "${EFI_SIZE_MB}MiB" \
@@ -156,7 +146,7 @@ fi
 # ─────────────────────────────────────────────
 # 4. フォーマット
 # ─────────────────────────────────────────────
-log "4. パーティションフォーマット"
+log "4. フォーマット (EFI=vfat, rootfs=ext4)"
 mkfs.vfat -F 32 -n "EFI"    "${PART1}"
 mkfs.ext4 -L    "rootfs"    "${PART2}"
 
@@ -165,7 +155,6 @@ mkfs.ext4 -L    "rootfs"    "${PART2}"
 # ─────────────────────────────────────────────
 log "5. rootfs 展開中 (時間がかかります)"
 mkdir -p "${MOUNT_ROOT}"
-chmod 777 "${MOUNT_ROOT}"
 mount "${PART2}" "${MOUNT_ROOT}"
 mkdir -p "${MOUNT_ROOT}/boot/efi"
 mount "${PART1}" "${MOUNT_ROOT}/boot/efi"
@@ -209,7 +198,5 @@ log "✅ イメージ作成完了！"
 echo "  出力: ${OUTPUT_IMG} (${IMG_ACTUAL_SIZE})"
 echo ""
 echo "  USB書き込み:"
-echo "    sudo bash morning.sh"
-echo "  または直接:"
 echo "    sudo dd if=${OUTPUT_IMG} of=/dev/sdX bs=4M status=progress && sync"
 echo "============================================"
