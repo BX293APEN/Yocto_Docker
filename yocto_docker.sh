@@ -65,6 +65,8 @@ ROOT_PASSWORD="${ROOT_PASSWORD:-password}"
 LOGFILE="/${WS}/build.log"
 sudo mkdir -p "/${WS}"
 sudo chmod 777 "/${WS}"
+sudo chown yocto:yocto "/${WS}"
+
 cd /${WS}
 exec > >(tee -a "${LOGFILE}") 2>&1
 
@@ -137,8 +139,8 @@ if [[ -f "${DONE_FLAG}" ]]; then
     log "再ビルドするには: rm ${DONE_FLAG}"
     # 成果物が既に /build/images に存在するか確認し、なければコピーだけ実行する
     OUTPUT_DIR="/${WS}/images"
-    mkdir -p "${OUTPUT_DIR}"
-    chmod 777 "${OUTPUT_DIR}"
+    sudo mkdir -p "${OUTPUT_DIR}"
+    sudo chmod 777 "${OUTPUT_DIR}"
     _resolve_target  # MACHINE を確定させる
     DEPLOY_DIR="/${WS}/tmp/deploy/images/${MACHINE}"
     if [[ -d "${DEPLOY_DIR}" ]]; then
@@ -242,8 +244,8 @@ fi
 step "3. ビルドディレクトリ初期化"
 
 BUILD_DIR="/${WS}/build_yocto"
-mkdir -p "${BUILD_DIR}"
-chmod 777 "${BUILD_DIR}"
+sudo mkdir -p "${BUILD_DIR}"
+sudo chmod 777 "${BUILD_DIR}"
 
 # oe-init-build-env でビルド環境を初期化し、local.conf をクリーン生成する。
 #
@@ -298,8 +300,8 @@ SSHEOF
     # 関数定義を .bbclass に分離し、local.conf からは inherit のみ行う。
     local BBCLASS_DIR="${BUILD_DIR}/classes"
     local CUSTOM_BBCLASS="${BBCLASS_DIR}/yocto-docker-custom.bbclass"
-    mkdir -p "${BBCLASS_DIR}"
-    chmod 777 "${BBCLASS_DIR}"
+    sudo mkdir -p "${BBCLASS_DIR}"
+    sudo chmod 777 "${BBCLASS_DIR}"
 
     # ヒアドキュメントは '' で変数展開を抑止し、sed でプレースホルダーを置換する
     cat > "${CUSTOM_BBCLASS}" << 'BBCLASSEOF'
@@ -522,8 +524,8 @@ MIRROREOF
     local DL_DIR_CFG="/${WS}/downloads"
     local SSTATE_DIR_CFG="/${WS}/sstate-cache"
     local TMPDIR_CFG="/${WS}/tmp"
-    mkdir -p "${DL_DIR_CFG}" "${SSTATE_DIR_CFG}" "${TMPDIR_CFG}"
-    chmod 777 "${DL_DIR_CFG}" "${SSTATE_DIR_CFG}" "${TMPDIR_CFG}"
+    sudo mkdir -p "${DL_DIR_CFG}" "${SSTATE_DIR_CFG}" "${TMPDIR_CFG}"
+    sudo chmod 777 "${DL_DIR_CFG}" "${SSTATE_DIR_CFG}" "${TMPDIR_CFG}"
     echo "DL_DIR = \"${DL_DIR_CFG}\""         >> "${LOCAL_CONF}"
     echo "SSTATE_DIR = \"${SSTATE_DIR_CFG}\""  >> "${LOCAL_CONF}"
     echo "TMPDIR = \"${TMPDIR_CFG}\""          >> "${LOCAL_CONF}"
@@ -626,8 +628,8 @@ step "8. 成果物コピー"
 
 DEPLOY_DIR="/${WS}/tmp/deploy/images/${MACHINE}"
 OUTPUT_DIR="/${WS}/images"
-mkdir -p "${OUTPUT_DIR}"
-chmod 777 "${OUTPUT_DIR}"
+sudo mkdir -p "${OUTPUT_DIR}"
+sudo chmod 777 "${OUTPUT_DIR}"
 
 # wic.gz (x86_64) または wic.bz2 (rpi)
 WIC_FILE=$(find "${DEPLOY_DIR}" \( -name "*.wic.gz" -o -name "*.wic.bz2" \) 2>/dev/null | head -1 || true)
