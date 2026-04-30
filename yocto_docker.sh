@@ -226,13 +226,18 @@ step "3. ビルドディレクトリ初期化"
 BUILD_DIR="/${WS}/build_yocto"
 mkdir -p "${BUILD_DIR}"
 
-# oe-init-build-env でビルド環境を初期化（初回のみ conf/を生成）
-if [[ ! -f "${BUILD_DIR}/conf/local.conf" ]]; then
-    log "oe-init-build-env を実行します"
-    cd "${POKY_DIR}"
-    # source はサブシェルでは効かないため bash -c で実行
-    bash -c "source oe-init-build-env ${BUILD_DIR}" || true
-fi
+# oe-init-build-env でビルド環境を初期化し、local.conf をクリーン生成する。
+#
+# 【設計方針】local.conf は毎回テンプレートから再生成して _patch_local_conf で上書きする。
+#   - 再実行時の重複追記を防ぎ、完全に冪等な状態を保つ。
+#   - sstate-cache / downloads はボリュームに残るのでビルドは高速に再開できる。
+#   - bblayers.conf は残す（レイヤー登録が消えないように）。
+log "local.conf を初期化します（oe-init-build-env）"
+cd "${POKY_DIR}"
+# local.conf だけ削除して oe-init-build-env に再生成させる
+# source はサブシェルでは効かないため bash -c で実行
+rm -f "${BUILD_DIR}/conf/local.conf"
+bash -c "source oe-init-build-env ${BUILD_DIR}" || true
 
 # ─────────────────────────────────────────────
 # 4. local.conf のカスタマイズ
@@ -242,73 +247,43 @@ step "4. local.conf カスタマイズ"
 LOCAL_CONF="${BUILD_DIR}/conf/local.conf"
 
 _patch_local_conf() {
-    # MACHINEの設定
+    # local.conf は呼び出し前に oe-init-build-env で毎回クリーン生成済み。
+    # そのためガード不要 — 全設定をシンプルに echo >> で追記する。
+
+    # ── 基本設定 ──────────────────────────────────────────────────────────────
     sed -i "s/^MACHINE ?=.*/MACHINE ?= \"${MACHINE}\"/" "${LOCAL_CONF}"
+    echo "BB_NUMBER_THREADS = \"${CPU_CORE}\""      >> "${LOCAL_CONF}"
+    echo "PARALLEL_MAKE = \"-j ${CPU_CORE}\""       >> "${LOCAL_CONF}"
+    echo "IMAGE_FSTYPES = \"${IMAGE_FSTYPES_EXTRA}\"" >> "${LOCAL_CONF}"
+    echo "DEFAULT_TIMEZONE = \"${TIME_ZONE}\""      >> "${LOCAL_CONF}"
+    echo "IMAGE_LINGUAS = \"en-us\""                >> "${LOCAL_CONF}"
 
-    # 並列ビルド数
-    if grep -q "^BB_NUMBER_THREADS" "${LOCAL_CONF}"; then
-        sed -i "s/^BB_NUMBER_THREADS.*/BB_NUMBER_THREADS = \"${CPU_CORE}\"/" "${LOCAL_CONF}"
-    else
-        echo "BB_NUMBER_THREADS = \"${CPU_CORE}\"" >> "${LOCAL_CONF}"
-    fi
-    if grep -q "^PARALLEL_MAKE" "${LOCAL_CONF}"; then
-        sed -i "s/^PARALLEL_MAKE.*/PARALLEL_MAKE = \"-j ${CPU_CORE}\"/" "${LOCAL_CONF}"
-    else
-        echo "PARALLEL_MAKE = \"-j ${CPU_CORE}\"" >> "${LOCAL_CONF}"
-    fi
-
-    # イメージ形式
-    if grep -q "^IMAGE_FSTYPES" "${LOCAL_CONF}"; then
-        sed -i "s|^IMAGE_FSTYPES.*|IMAGE_FSTYPES = \"${IMAGE_FSTYPES_EXTRA}\"|" "${LOCAL_CONF}"
-    else
-        echo "IMAGE_FSTYPES = \"${IMAGE_FSTYPES_EXTRA}\"" >> "${LOCAL_CONF}"
-    fi
-
-    # タイムゾーン
-    if grep -q "^DEFAULT_TIMEZONE" "${LOCAL_CONF}"; then
-        sed -i "s|^DEFAULT_TIMEZONE.*|DEFAULT_TIMEZONE = \"${TIME_ZONE}\"|" "${LOCAL_CONF}"
-    else
-        echo "DEFAULT_TIMEZONE = \"${TIME_ZONE}\"" >> "${LOCAL_CONF}"
-    fi
-
-    # ロケール
-    if grep -q "^IMAGE_LINGUAS" "${LOCAL_CONF}"; then
-        sed -i "s/^IMAGE_LINGUAS.*/IMAGE_LINGUAS = \"en-us\"/" "${LOCAL_CONF}"
-    else
-        echo "IMAGE_LINGUAS = \"en-us\"" >> "${LOCAL_CONF}"
-    fi
-
-    # SSH の有効化
+    # ── SSH ───────────────────────────────────────────────────────────────────
     if [[ "${ENABLE_SSH}" == "true" ]]; then
-        if ! grep -q "openssh" "${LOCAL_CONF}"; then
-            cat >> "${LOCAL_CONF}" << 'SSHEOF'
+        cat >> "${LOCAL_CONF}" << 'SSHEOF'
 
 # SSH サーバー有効化
 IMAGE_INSTALL:append = " openssh openssh-sshd openssh-sftp-server"
 SSHEOF
-        fi
     fi
 
-    # 追加パッケージ
+    # ── 追加パッケージ ────────────────────────────────────────────────────────
     if [[ -n "${EXTRA_PACKAGES}" ]]; then
+        local PKGS
         PKGS=$(echo "${EXTRA_PACKAGES}" | tr ',' ' ')
         echo "IMAGE_INSTALL:append = \" ${PKGS}\"" >> "${LOCAL_CONF}"
     fi
 
-    # rootパスワード設定
-    # BitBake の conf パーサーはシェル関数構文を解釈できないため、
-    # 関数定義は .bbclass に分離し、local.conf からは inherit + 変数代入のみ行う。
-    # BitBake は BBPATH 配下の classes/ サブディレクトリを検索する
-    # conf/ に置いても classes/ が無いと "Could not inherit" になる
-    BBCLASS_DIR="${BUILD_DIR}/classes"
+    # ── root パスワード (.bbclass 経由) ──────────────────────────────────────
+    # BitBake の conf パーサーはシェル関数構文を解釈できないため
+    # 関数定義を .bbclass に分離し、local.conf からは inherit のみ行う。
+    local BBCLASS_DIR="${BUILD_DIR}/classes"
+    local CUSTOM_BBCLASS="${BBCLASS_DIR}/yocto-docker-custom.bbclass"
     mkdir -p "${BBCLASS_DIR}"
-    CUSTOM_BBCLASS="${BBCLASS_DIR}/yocto-docker-custom.bbclass"
 
-    # bbclass の書き出し (ヒアドキュメントは '' で変数展開を抑止し、
-    # プレースホルダーを後で sed 置換する)
+    # ヒアドキュメントは '' で変数展開を抑止し、sed でプレースホルダーを置換する
     cat > "${CUSTOM_BBCLASS}" << 'BBCLASSEOF'
-# yocto-docker-custom.bbclass
-# Docker ビルド時に生成される自動カスタマイズクラス
+# yocto-docker-custom.bbclass — Docker ビルド時に自動生成
 
 set_root_password () {
     echo "root:__ROOT_PASSWORD__" | chpasswd -R ${IMAGE_ROOTFS} 2>/dev/null || \
@@ -320,64 +295,50 @@ ROOTFS_POSTPROCESS_COMMAND:append = " set_root_password;"
 BBCLASSEOF
     sed -i "s|__ROOT_PASSWORD__|${ROOT_PASSWORD}|g" "${CUSTOM_BBCLASS}"
 
-    # local.conf から bbclass を読み込む (変数代入のみ → パーサーセーフ)
-    if ! grep -q "yocto-docker-custom" "${LOCAL_CONF}"; then
-        echo "" >> "${LOCAL_CONF}"
-        echo "# カスタマイズクラス (rootパスワード / ネットワーク設定)" >> "${LOCAL_CONF}"
-        echo "INHERIT += \"yocto-docker-custom\"" >> "${LOCAL_CONF}"
-        echo "BBPATH:prepend := \"${BUILD_DIR}:\"" >> "${LOCAL_CONF}"
-    fi
+    cat >> "${LOCAL_CONF}" << EOF
 
-    # ── NetworkManager 検出 ──────────────────────────────────────────────────
+# カスタマイズクラス (root パスワード / ネットワーク設定)
+INHERIT += "yocto-docker-custom"
+BBPATH:prepend := "${BUILD_DIR}:"
+EOF
+
+    # ── NetworkManager 検出 ───────────────────────────────────────────────────
     local _pkgs_lower
     _pkgs_lower=$(echo "${EXTRA_PACKAGES}" | tr '[:upper:]' '[:lower:]')
     local _use_nm=false
-    if echo "${_pkgs_lower}" | grep -qw 'networkmanager'; then
-        _use_nm=true
-    fi
+    echo "${_pkgs_lower}" | grep -qw 'networkmanager' && _use_nm=true
 
-    # ── systemd init manager ────────────────────────────────────────────────
-    # NM は systemd 必須のため、_use_nm=true なら自動で有効化
+    # ── systemd (NM 使用時は自動有効化) ──────────────────────────────────────
     if [[ "${USE_SYSTEMD}" == "true" || "${_use_nm}" == "true" ]]; then
-        if ! grep -q "DISTRO_FEATURES.*systemd" "${LOCAL_CONF}"; then
-            cat >> "${LOCAL_CONF}" << 'SYSTEMDEOF'
+        cat >> "${LOCAL_CONF}" << 'SYSTEMDEOF'
 
 # systemd を init manager として使用
 DISTRO_FEATURES:append = " systemd"
 VIRTUAL-RUNTIME_init_manager = "systemd"
 VIRTUAL-RUNTIME_initscripts = ""
 SYSTEMDEOF
-        fi
     fi
 
-    # ── NetworkManager 設定 ──────────────────────────────────────────────────
+    # ── NetworkManager 設定 ───────────────────────────────────────────────────
     if [[ "${_use_nm}" == "true" ]]; then
         log "NetworkManager を検出。connman 除外・NM 統合設定を追加します。"
         cat >> "${LOCAL_CONF}" << 'NMEOF'
 
-# ── NetworkManager 統合設定 ──
-# connman との競合を回避
+# NetworkManager 統合設定
 PACKAGE_EXCLUDE += "connman connman-client connman-gnome connman-conf"
 IMAGE_INSTALL:remove = " connman connman-client connman-gnome connman-conf"
-
-# NM を DISTRO_FEATURES へ追加
 DISTRO_FEATURES:append = " networkmanager"
-
-# NM をネットワーク管理ランタイムとして指定
 VIRTUAL-RUNTIME_net_manager = "networkmanager"
-
-# systemd サービスの自動起動制御
-# デフォルトは無効にして NM だけを有効化する
 SYSTEMD_AUTO_ENABLE = "disable"
 SYSTEMD_AUTO_ENABLE:pn-networkmanager = "enable"
 NMEOF
     fi
 
-    # ── ネットワーク設定 (systemd-networkd / NetworkManager 切り替え) ────────
+    # ── ネットワーク設定 (static / dhcp) ─────────────────────────────────────
     if [[ "${_use_nm}" == "true" && "${NETWORK_PROTO}" == "static" ]]; then
-        # NM + static: キーファイルを rootfs に直接生成
-        PREFIX=$(echo "${STATIC_NETMASK}" | awk -F. '{sum=0; for(i=1;i<=4;i++){n=$i; for(j=0;j<8;j++){sum+=and(n,1);n=rshift(n,1)}}; print sum}')
-        log "NetworkManager static IP 設定 (${STATIC_IP}/${PREFIX}) をキーファイルで生成します。"
+        local PREFIX
+        PREFIX=$(echo "${STATIC_NETMASK}" | awk -F. '{s=0;for(i=1;i<=4;i++){n=$i;for(j=0;j<8;j++){s+=and(n,1);n=rshift(n,1)}};print s}')
+        log "NetworkManager static IP (${STATIC_IP}/${PREFIX}) をキーファイルで生成します。"
         cat >> "${CUSTOM_BBCLASS}" << 'NETEOF'
 
 configure_network () {
@@ -413,12 +374,11 @@ NETEOF
             "${CUSTOM_BBCLASS}"
 
     elif [[ "${_use_nm}" == "true" ]]; then
-        # NM + dhcp: NM デフォルトが DHCP のため設定ファイル不要
         log "NetworkManager DHCP 設定。キーファイルは不要です (NM デフォルト動作)。"
 
     elif [[ "${NETWORK_PROTO}" == "static" ]]; then
-        # サブネットマスク → プレフィックス長に変換
-        PREFIX=$(echo "${STATIC_NETMASK}" | awk -F. '{sum=0; for(i=1;i<=4;i++){n=$i; for(j=0;j<8;j++){sum+=and(n,1);n=rshift(n,1)}}; print sum}')
+        local PREFIX
+        PREFIX=$(echo "${STATIC_NETMASK}" | awk -F. '{s=0;for(i=1;i<=4;i++){n=$i;for(j=0;j<8;j++){s+=and(n,1);n=rshift(n,1)}};print s}')
         cat >> "${CUSTOM_BBCLASS}" << 'NETEOF'
 
 configure_network () {
@@ -464,102 +424,73 @@ ROOTFS_POSTPROCESS_COMMAND:append = " configure_network;"
 NETEOF
     fi
 
-    # ── systemd-networkd / systemd-resolved の誤指定ガード ──────────────────
+    # ── systemd-networkd/resolved の誤指定ガード ──────────────────────────────
     if echo "${_pkgs_lower}" | grep -qE 'systemd-networkd|systemd-resolved'; then
-        warn "EXTRA_PACKAGES に systemd-networkd/systemd-resolved が含まれています。"
-        warn "DISTRO_FEATURES:systemd が必要です。USE_SYSTEMD=true を推奨します。"
-        if ! grep -q "DISTRO_FEATURES.*systemd" "${LOCAL_CONF}"; then
-            cat >> "${LOCAL_CONF}" << 'SYSTEMDEOF'
+        warn "EXTRA_PACKAGES に systemd-networkd/systemd-resolved が含まれています。USE_SYSTEMD=true を推奨します。"
+        cat >> "${LOCAL_CONF}" << 'SYSTEMDEOF'
 
 # systemd-networkd/resolved を EXTRA_PACKAGES で指定したため自動有効化
 DISTRO_FEATURES:append = " systemd"
 VIRTUAL-RUNTIME_init_manager = "systemd"
 VIRTUAL-RUNTIME_initscripts = ""
 SYSTEMDEOF
-        fi
     fi
 
-    # rootパスワードを空にしない設定（デバッグ用）
-    if ! grep -q "EXTRA_IMAGE_FEATURES.*debug-tweaks" "${LOCAL_CONF}"; then
-        echo "" >> "${LOCAL_CONF}"
-        echo "# 開発用設定: rootパスワードなしログインを許可" >> "${LOCAL_CONF}"
-        echo "EXTRA_IMAGE_FEATURES += \"debug-tweaks\"" >> "${LOCAL_CONF}"
-    fi
+    # ── 開発用設定 ────────────────────────────────────────────────────────────
+    cat >> "${LOCAL_CONF}" << 'DEVEOF'
 
-    # wic用: rootfs.tar.gz 出力
-    echo "IMAGE_FSTYPES:append = \" tar.gz\"" >> "${LOCAL_CONF}"
+# 開発用設定: root パスワードなしログインを許可
+EXTRA_IMAGE_FEATURES += "debug-tweaks"
+DEVEOF
 
-    # ── ソースミラー設定 ─────────────────────────────────────────────────────
-    # .env の PREMIRRORS / MIRRORS を local.conf に書き込む。
-    # 書式: "パターン1 URL1 パターン2 URL2 ..." (スペース区切りペア)
-    # ヒアドキュメントは '' で変数展開を抑止し、プレースホルダーを sed で置換する。
-    # これにより、URL 内の特殊文字 (/ . * など) がシェル展開でバグるのを防ぐ。
+    # ── wic 用: rootfs.tar.gz を追加出力 ─────────────────────────────────────
+    echo 'IMAGE_FSTYPES:append = " tar.gz"' >> "${LOCAL_CONF}"
+
+    # ── ソースミラー ──────────────────────────────────────────────────────────
+    # .env の PREMIRRORS / MIRRORS をスペース区切りペアで指定する。
+    # URL 内の特殊文字 (/ . *) がシェル展開でバグらないよう
+    # ヒアドキュメント '' + sed 置換で安全に書き込む。
     _write_mirror_conf() {
-        local varname="$1"   # PREMIRRORS または MIRRORS
-        local raw="$2"       # スペース区切りの "パターン URL ..." 文字列
-        local conf_key="$3"  # local.conf に書くキー名
+        local raw="$1"       # "パターン1 URL1 パターン2 URL2 ..."
+        local conf_key="$2"  # PREMIRRORS または MIRRORS
 
-        [[ -z "${raw// /}" ]] && return   # 空なら何もしない
+        [[ -z "${raw// /}" ]] && return
 
-        # ガード: 既に同キーが書かれていたら追記しない（再実行対策）
-        if grep -q "^${conf_key}" "${LOCAL_CONF}"; then
-            log "${conf_key} は既に local.conf に設定済みです。スキップします。"
-            return
-        fi
-
-        # スペース区切りペア → "パターン URL \n" 形式の文字列を組み立てる
-        local entries=""
-        local token_arr=()
-        # bash 配列に分割
+        local entries="" token_arr=()
         read -r -a token_arr <<< "${raw}"
         local i=0
         while [[ $i -lt ${#token_arr[@]} ]]; do
             local pattern="${token_arr[$i]}"
             local url="${token_arr[$((i+1))]}"
             if [[ -z "${pattern}" || -z "${url}" ]]; then
-                warn "ミラー設定のペアが不完全です（パターン/URLが対になっていません）。スキップします: ${raw}"
+                warn "ミラー設定のペアが不完全です。スキップします: ${raw}"
                 return
             fi
             entries="${entries}${pattern} ${url} \\\n"
             i=$((i+2))
         done
+        log "${conf_key} を $((${#token_arr[@]}/2)) 件設定します。"
 
-        log "${conf_key} を ${#token_arr[@]}/2 件設定します。"
-
-        # ヒアドキュメント（'' で変数展開を完全抑止）でテンプレートを書き出し、
-        # sed でプレースホルダーを実値に置換して local.conf に追記する。
-        local tmpfile
-        tmpfile=$(mktemp)
-        cat >> "${tmpfile}" << 'MIRROREOF'
+        local tmpfile; tmpfile=$(mktemp)
+        cat > "${tmpfile}" << 'MIRROREOF'
 
 # __CONF_KEY__ (.env で設定)
 __CONF_KEY__ += "__ENTRIES__"
 MIRROREOF
-        # \n を実際の改行に変換しつつ sed 置換（| をデリミタにして / を安全に扱う）
-        local entries_expanded
+        local entries_expanded entries_escaped
         entries_expanded=$(printf '%b' "${entries}")
-        # sed の置換文字列に含まれる & や \ をエスケープ
-        local entries_escaped
         entries_escaped=$(printf '%s' "${entries_expanded}" | sed 's/[&\]/\\&/g')
-
-        sed \
-            -e "s|__CONF_KEY__|${conf_key}|g" \
+        sed -e "s|__CONF_KEY__|${conf_key}|g" \
             -e "s|__ENTRIES__|${entries_escaped}|g" \
             "${tmpfile}" >> "${LOCAL_CONF}"
         rm -f "${tmpfile}"
     }
 
-    _write_mirror_conf "PREMIRRORS" "${PREMIRRORS}" "PREMIRRORS"
-    _write_mirror_conf "MIRRORS"    "${MIRRORS}"    "MIRRORS"
+    _write_mirror_conf "${PREMIRRORS}" "PREMIRRORS"
+    _write_mirror_conf "${MIRRORS}"    "MIRRORS"
 
     # ── フェッチリトライ回数 ──────────────────────────────────────────────────
-    # BB_FETCH_RETRIES: ミラーを含む全フェッチ試行の最大リトライ回数。
-    # ミラーが不安定な場合に複数回試みることでフェッチ失敗を減らす。
-    if grep -q "^BB_FETCH_RETRIES" "${LOCAL_CONF}"; then
-        sed -i "s/^BB_FETCH_RETRIES.*/BB_FETCH_RETRIES = \"${FETCH_RETRIES}\"/" "${LOCAL_CONF}"
-    else
-        echo "BB_FETCH_RETRIES = \"${FETCH_RETRIES}\"" >> "${LOCAL_CONF}"
-    fi
+    echo "BB_FETCH_RETRIES = \"${FETCH_RETRIES}\"" >> "${LOCAL_CONF}"
     log "BB_FETCH_RETRIES = ${FETCH_RETRIES}"
 
     log "local.conf のカスタマイズ完了"
