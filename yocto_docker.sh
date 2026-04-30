@@ -142,10 +142,12 @@ if [[ -f "${DONE_FLAG}" ]]; then
     sudo mkdir -p "${OUTPUT_DIR}"
     sudo chmod 777 "${OUTPUT_DIR}"
     _resolve_target  # MACHINE を確定させる
-    # TMPDIR=BUILD_DIR/tmp, TCLIBCAPPEND="" で固定しているため常にこのパスを参照する
+    # DEPLOY_DIR を動的に解決（tmp-glibc 等サフィックスに依存しない）
     BUILD_DIR_SKIP="/${WS}/build_yocto"
-    DEPLOY_DIR="${BUILD_DIR_SKIP}/tmp/deploy/images/${MACHINE}"
-    if [[ -d "${DEPLOY_DIR}" ]]; then
+    DEPLOY_DIR=$(find "${BUILD_DIR_SKIP}" -type d \
+        -path "*/deploy/images/${MACHINE}" 2>/dev/null | head -1 || true)
+    if [[ -n "${DEPLOY_DIR}" ]]; then
+        log "DEPLOY_DIR = ${DEPLOY_DIR}"
         WIC_FILE=$(find "${DEPLOY_DIR}" \( -name "*.wic.gz" -o -name "*.wic.bz2" \) 2>/dev/null | head -1 || true)
         TAR_FILE=$(find "${DEPLOY_DIR}" -name "*rootfs*.tar.gz" 2>/dev/null | head -1 || true)
         [[ -n "${WIC_FILE}" ]] && cp -v "${WIC_FILE}" "/${WS}/yocto-image.wic.gz" && log "WICイメージ → /${WS}/yocto-image.wic.gz"
@@ -155,7 +157,7 @@ if [[ -f "${DONE_FLAG}" ]]; then
             -exec cp -v {} "${OUTPUT_DIR}/" \; 2>/dev/null || true
         log "成果物を ${OUTPUT_DIR} にコピーしました"
     else
-        warn "DEPLOY_DIR が存在しません: ${DEPLOY_DIR} (TMPDIR が volume 外だった可能性あり)"
+        warn "DEPLOY_DIR が見つかりません (MACHINE=${MACHINE}, BUILD_DIR=${BUILD_DIR_SKIP})"
     fi
     exit 0
 fi
@@ -520,33 +522,28 @@ MIRROREOF
     echo "BB_FETCH_RETRIES = \"${FETCH_RETRIES}\"" >> "${LOCAL_CONF}"
     log "BB_FETCH_RETRIES = ${FETCH_RETRIES}"
 
-    # ── ダウンロード・sstate キャッシュ・TMPDIR ──────────────────────────────
+    # ── ダウンロード・sstate キャッシュ ──────────────────────────────────────
     # Step7(oe-init-build-env 後)ではなくここで設定することで、
     # local.conf への追記を1箇所に集約し再実行時の重複を防ぐ。
     #
-    # 【TMPDIR 設計】
-    #   Yocto の DISTRO (openembedded-core) は TCLIBCAPPEND="-glibc" を付けて
-    #   TMPDIR を "<BUILD_DIR>/tmp-glibc" に自動リダイレクトする。
-    #   local.conf で TMPDIR を BUILD_DIR 外 (例: /build/tmp) に設定すると、
-    #   実際の出力先は /build/tmp-glibc になり、Step8 の find が空振りする。
-    #
-    #   根本修正:
-    #     1. TMPDIR を BUILD_DIR 内の "tmp" に設定する。
-    #     2. TCLIBCAPPEND = "" で "-glibc" サフィックスを無効化する。
-    #   これにより実際の出力先が TMPDIR = BUILD_DIR/tmp に固定され、
-    #   Step8 の DEPLOY_DIR 検索が常に正しく機能する。
+    # 【TMPDIR について】
+    #   TMPDIR は local.conf に設定しない。
+    #   Yocto の openembedded-core ディストロは TCLIBCAPPEND="-glibc" を持ち、
+    #   TMPDIR に自動でサフィックスを付加する仕様になっている。
+    #   local.conf の TCLIBCAPPEND="" で上書きしようとしても、
+    #   distro の設定ファイルが後から再上書きするため効果がなく、
+    #   結果として常に BUILD_DIR/tmp-glibc に出力される。
+    #   そのため TMPDIR は Yocto デフォルト (BUILD_DIR/tmp-glibc) に任せ、
+    #   成果物コピー(Step8)側でパスを動的に解決する設計にしている。
     local DL_DIR_CFG="/${WS}/downloads"
     local SSTATE_DIR_CFG="/${WS}/sstate-cache"
-    local TMPDIR_CFG="${BUILD_DIR}/tmp"
-    sudo mkdir -p "${DL_DIR_CFG}" "${SSTATE_DIR_CFG}" "${TMPDIR_CFG}"
-    sudo chmod 777 "${DL_DIR_CFG}" "${SSTATE_DIR_CFG}" "${TMPDIR_CFG}"
+    sudo mkdir -p "${DL_DIR_CFG}" "${SSTATE_DIR_CFG}"
+    sudo chmod 777 "${DL_DIR_CFG}" "${SSTATE_DIR_CFG}"
     echo "DL_DIR = \"${DL_DIR_CFG}\""         >> "${LOCAL_CONF}"
     echo "SSTATE_DIR = \"${SSTATE_DIR_CFG}\""  >> "${LOCAL_CONF}"
-    echo "TMPDIR = \"${TMPDIR_CFG}\""          >> "${LOCAL_CONF}"
-    echo "TCLIBCAPPEND = \"\""                 >> "${LOCAL_CONF}"
     log "DL_DIR    = ${DL_DIR_CFG}"
     log "SSTATE_DIR= ${SSTATE_DIR_CFG}"
-    log "TMPDIR    = ${TMPDIR_CFG} (TCLIBCAPPEND=\"\" でサフィックス無効化)"
+    log "TMPDIR    = Yocto デフォルト (BUILD_DIR/tmp-glibc) に委譲"
 
     log "local.conf のカスタマイズ完了"
 }
@@ -641,9 +638,19 @@ fi
 # ─────────────────────────────────────────────
 step "8. 成果物コピー"
 
-# TMPDIR = BUILD_DIR/tmp, TCLIBCAPPEND="" で固定しているため
-# DEPLOY_DIR は常に BUILD_DIR/tmp/deploy/images/${MACHINE} になる。
-DEPLOY_DIR="${BUILD_DIR}/tmp/deploy/images/${MACHINE}"
+# DEPLOY_DIR の動的解決
+# Yocto は TCLIBCAPPEND="-glibc" により BUILD_DIR/tmp-glibc に出力する。
+# distro 設定が local.conf より優先されるため TMPDIR の固定は不可能。
+# そのため find で実際に生成されたパスを探索して解決する。
+DEPLOY_DIR=$(find "${BUILD_DIR}" -type d \
+    -path "*/deploy/images/${MACHINE}" 2>/dev/null | head -1 || true)
+
+if [[ -z "${DEPLOY_DIR}" ]]; then
+    warn "DEPLOY_DIR が見つかりません (MACHINE=${MACHINE}, BUILD_DIR=${BUILD_DIR})"
+else
+    log "DEPLOY_DIR = ${DEPLOY_DIR}"
+fi
+
 OUTPUT_DIR="/${WS}/images"
 sudo mkdir -p "${OUTPUT_DIR}"
 sudo chmod 777 "${OUTPUT_DIR}"
