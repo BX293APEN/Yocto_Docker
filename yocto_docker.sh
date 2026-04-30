@@ -133,8 +133,26 @@ sudo mkdir -p "${FLAGS_DIR}"
 sudo chmod 777 "/${FLAGS_DIR}"
 
 if [[ -f "${DONE_FLAG}" ]]; then
-    log "ビルド完了フラグが存在します。スキップします。"
+    log "ビルド完了フラグが存在します。ビルドをスキップします。"
     log "再ビルドするには: rm ${DONE_FLAG}"
+    # 成果物が既に /build/images に存在するか確認し、なければコピーだけ実行する
+    OUTPUT_DIR="/${WS}/images"
+    mkdir -p "${OUTPUT_DIR}"
+    chmod 777 "${OUTPUT_DIR}"
+    _resolve_target  # MACHINE を確定させる
+    DEPLOY_DIR="/${WS}/tmp/deploy/images/${MACHINE}"
+    if [[ -d "${DEPLOY_DIR}" ]]; then
+        WIC_FILE=$(find "${DEPLOY_DIR}" \( -name "*.wic.gz" -o -name "*.wic.bz2" \) 2>/dev/null | head -1 || true)
+        TAR_FILE=$(find "${DEPLOY_DIR}" -name "*rootfs*.tar.gz" 2>/dev/null | head -1 || true)
+        [[ -n "${WIC_FILE}" ]] && cp -v "${WIC_FILE}" "/${WS}/yocto-image.wic.gz" && log "WICイメージ → /${WS}/yocto-image.wic.gz"
+        [[ -n "${TAR_FILE}" ]] && cp -v "${TAR_FILE}" "/${WS}/yocto-rootfs.tar.gz" && log "rootfs → /${WS}/yocto-rootfs.tar.gz"
+        find "${DEPLOY_DIR}" -maxdepth 1 -type f \
+            ! -name "*.manifest" ! -name "*.json" \
+            -exec cp -v {} "${OUTPUT_DIR}/" \; 2>/dev/null || true
+        log "成果物を ${OUTPUT_DIR} にコピーしました"
+    else
+        warn "DEPLOY_DIR が存在しません: ${DEPLOY_DIR} (TMPDIR が volume 外だった可能性あり)"
+    fi
     exit 0
 fi
 
@@ -503,12 +521,15 @@ MIRROREOF
     # local.conf への追記を1箇所に集約し再実行時の重複を防ぐ。
     local DL_DIR_CFG="/${WS}/downloads"
     local SSTATE_DIR_CFG="/${WS}/sstate-cache"
-    mkdir -p "${DL_DIR_CFG}" "${SSTATE_DIR_CFG}"
-    chmod 777 "${DL_DIR_CFG}" "${SSTATE_DIR_CFG}"
+    local TMPDIR_CFG="/${WS}/tmp"
+    mkdir -p "${DL_DIR_CFG}" "${SSTATE_DIR_CFG}" "${TMPDIR_CFG}"
+    chmod 777 "${DL_DIR_CFG}" "${SSTATE_DIR_CFG}" "${TMPDIR_CFG}"
     echo "DL_DIR = \"${DL_DIR_CFG}\""         >> "${LOCAL_CONF}"
-    echo "SSTATE_DIR = \"${SSTATE_DIR_CFG}\"" >> "${LOCAL_CONF}"
+    echo "SSTATE_DIR = \"${SSTATE_DIR_CFG}\""  >> "${LOCAL_CONF}"
+    echo "TMPDIR = \"${TMPDIR_CFG}\""          >> "${LOCAL_CONF}"
     log "DL_DIR    = ${DL_DIR_CFG}"
     log "SSTATE_DIR= ${SSTATE_DIR_CFG}"
+    log "TMPDIR    = ${TMPDIR_CFG}"
 
     log "local.conf のカスタマイズ完了"
 }
@@ -603,7 +624,7 @@ fi
 # ─────────────────────────────────────────────
 step "8. 成果物コピー"
 
-DEPLOY_DIR="${BUILD_DIR}/tmp/deploy/images/${MACHINE}"
+DEPLOY_DIR="/${WS}/tmp/deploy/images/${MACHINE}"
 OUTPUT_DIR="/${WS}/images"
 mkdir -p "${OUTPUT_DIR}"
 chmod 777 "${OUTPUT_DIR}"
