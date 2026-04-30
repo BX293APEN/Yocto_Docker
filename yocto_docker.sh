@@ -177,10 +177,11 @@ if [[ -z "${_LAYERS_TO_CLONE// /}" ]]; then
     log "追加レイヤーなし。スキップします。"
 else
     for _LAYER_ENTRY in ${_LAYERS_TO_CLONE}; do
-        # "name,url" または "name,url,branch" に分解
-        _LAYER_NAME=$(echo "${_LAYER_ENTRY}" | cut -d',' -f1)
-        _LAYER_URL=$(echo  "${_LAYER_ENTRY}" | cut -d',' -f2)
+        # "name,url[,branch[,subpath]]" に分解
+        _LAYER_NAME=$(  echo "${_LAYER_ENTRY}" | cut -d',' -f1)
+        _LAYER_URL=$(   echo "${_LAYER_ENTRY}" | cut -d',' -f2)
         _LAYER_BRANCH=$(echo "${_LAYER_ENTRY}" | cut -d',' -f3)
+        _LAYER_SUBPATH=$(echo "${_LAYER_ENTRY}" | cut -d',' -f4)
         _LAYER_BRANCH="${_LAYER_BRANCH:-${YOCTO_RELEASE}}"
 
         # 空エントリのスキップ
@@ -422,9 +423,16 @@ BBLAYERS_CONF="${BUILD_DIR}/conf/bblayers.conf"
 
 _register_layer_to_bblayers() {
     local layer_name="$1"
-    local layer_path="/${WS}/${layer_name}"
+    local subpath="$2"   # 省略可。指定時は /{WS}/{layer_name}/{subpath} で登録
+    local layer_path
 
     [[ -z "${layer_name}" ]] && return
+
+    if [[ -n "${subpath}" ]]; then
+        layer_path="/${WS}/${layer_name}/${subpath}"
+    else
+        layer_path="/${WS}/${layer_name}"
+    fi
 
     if [[ ! -d "${layer_path}" ]]; then
         warn "レイヤーディレクトリが存在しません: ${layer_path} (スキップ)"
@@ -432,22 +440,22 @@ _register_layer_to_bblayers() {
     fi
 
     if grep -q "${layer_path}" "${BBLAYERS_CONF}"; then
-        log "${layer_name} は既に bblayers.conf に登録済みです。"
+        log "${layer_name}${subpath:+/$subpath} は既に bblayers.conf に登録済みです。"
         return
     fi
 
-    log "bblayers.conf に ${layer_name} を追加します"
-    # BBLAYERS 変数の末尾行 (閉じダブルクォート) の直前に行を挿入
+    log "bblayers.conf に ${layer_name}${subpath:+/$subpath} を追加します"
     sed -i "s|\"$|  ${layer_path} \\\\\n\"|" "${BBLAYERS_CONF}"
 }
 
 # DEVICE_PROFILE 由来のレイヤーを登録
 [[ -n "${EXTRA_LAYER}" ]] && _register_layer_to_bblayers "${EXTRA_LAYER}"
 
-# EXTRA_LAYERS を登録
+# EXTRA_LAYERS を登録 (サブパスも考慮)
 for _LAYER_ENTRY in ${EXTRA_LAYERS}; do
-    _LAYER_NAME=$(echo "${_LAYER_ENTRY}" | cut -d',' -f1)
-    [[ -n "${_LAYER_NAME}" ]] && _register_layer_to_bblayers "${_LAYER_NAME}"
+    _LAYER_NAME=$(   echo "${_LAYER_ENTRY}" | cut -d',' -f1)
+    _LAYER_SUBPATH=$(echo "${_LAYER_ENTRY}" | cut -d',' -f4)
+    [[ -n "${_LAYER_NAME}" ]] && _register_layer_to_bblayers "${_LAYER_NAME}" "${_LAYER_SUBPATH}"
 done
 
 # ─────────────────────────────────────────────
