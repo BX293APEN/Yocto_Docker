@@ -320,8 +320,56 @@ BBCLASSEOF
         echo "BBPATH:prepend := \"${BUILD_DIR}:\"" >> "${LOCAL_CONF}"
     fi
 
-    # ネットワーク設定（systemd-networkd）
-    if [[ "${NETWORK_PROTO}" == "static" ]]; then
+    # ── NetworkManager 検出 ──────────────────────────────────────────────────
+    local _pkgs_lower
+    _pkgs_lower=$(echo "${EXTRA_PACKAGES}" | tr '[:upper:]' '[:lower:]')
+    local _use_nm=false
+    if echo "${_pkgs_lower}" | grep -qw 'networkmanager'; then
+        _use_nm=true
+    fi
+
+    # ── systemd init manager ────────────────────────────────────────────────
+    # NM は systemd 必須のため、_use_nm=true なら自動で有効化
+    if [[ "${USE_SYSTEMD}" == "true" || "${_use_nm}" == "true" ]]; then
+        if ! grep -q "DISTRO_FEATURES.*systemd" "${LOCAL_CONF}"; then
+            cat >> "${LOCAL_CONF}" << 'SYSTEMDEOF'
+
+# systemd を init manager として使用
+DISTRO_FEATURES:append = " systemd"
+VIRTUAL-RUNTIME_init_manager = "systemd"
+VIRTUAL-RUNTIME_initscripts = ""
+SYSTEMDEOF
+        fi
+    fi
+
+    # ── NetworkManager 設定 ──────────────────────────────────────────────────
+    if [[ "${_use_nm}" == "true" ]]; then
+        log "NetworkManager を検出。connman 除外・NM 統合設定を追加します。"
+        cat >> "${LOCAL_CONF}" << 'NMEOF'
+
+# ── NetworkManager 統合設定 ──
+# connman との競合を回避
+PACKAGE_EXCLUDE += "connman connman-client connman-gnome connman-conf"
+IMAGE_INSTALL:remove = " connman connman-client connman-gnome connman-conf"
+
+# NM を DISTRO_FEATURES へ追加
+DISTRO_FEATURES:append = " networkmanager"
+
+# NM をネットワーク管理ランタイムとして指定
+VIRTUAL-RUNTIME_net_manager = "networkmanager"
+
+# systemd サービスの自動起動制御
+# デフォルトは無効にして NM だけを有効化する
+SYSTEMD_AUTO_ENABLE = "disable"
+SYSTEMD_AUTO_ENABLE:pn-networkmanager = "enable"
+NMEOF
+    fi
+
+    # ── ネットワーク設定 (systemd-networkd / NetworkManager 切り替え) ────────
+    if [[ "${_use_nm}" == "true" ]]; then
+        # NetworkManager が管理するため systemd-networkd の設定は書かない
+        log "ネットワーク設定は NetworkManager に委譲します。systemd-networkd 設定はスキップします。"
+    elif [[ "${NETWORK_PROTO}" == "static" ]]; then
         # サブネットマスク → プレフィックス長に変換
         PREFIX=$(echo "${STATIC_NETMASK}" | awk -F. '{sum=0; for(i=1;i<=4;i++){n=$i; for(j=0;j<8;j++){sum+=and(n,1);n=rshift(n,1)}}; print sum}')
         cat >> "${CUSTOM_BBCLASS}" << 'NETEOF'
@@ -369,36 +417,10 @@ ROOTFS_POSTPROCESS_COMMAND:append = " configure_network;"
 NETEOF
     fi
 
-    # rootパスワードを空にしない設定（デバッグ用）
-    if ! grep -q "EXTRA_IMAGE_FEATURES.*debug-tweaks" "${LOCAL_CONF}"; then
-        echo "" >> "${LOCAL_CONF}"
-        echo "# 開発用設定: rootパスワードなしログインを許可" >> "${LOCAL_CONF}"
-        echo "EXTRA_IMAGE_FEATURES += \"debug-tweaks\"" >> "${LOCAL_CONF}"
-    fi
-
-    # wic用: rootfs.tar.gz 出力
-    echo "IMAGE_FSTYPES:append = \" tar.gz\"" >> "${LOCAL_CONF}"
-
-    # systemd init manager
-    if [[ "${USE_SYSTEMD}" == "true" ]]; then
-        cat >> "${LOCAL_CONF}" << 'SYSTEMDEOF'
-
-# systemd を init manager として使用
-DISTRO_FEATURES:append = " systemd"
-VIRTUAL-RUNTIME_init_manager = "systemd"
-VIRTUAL-RUNTIME_initscripts = ""
-SYSTEMDEOF
-    fi
-
-    # ネットワーク設定 (systemd-networkd はDISTRO_FEATURES:systemdが必要)
-    # EXTRA_PACKAGES に systemd-networkd / systemd-resolved が含まれている場合は
-    # 自動で DISTRO_FEATURES に systemd を追加する
-    local _pkgs_lower
-    _pkgs_lower=$(echo "${EXTRA_PACKAGES}" | tr '[:upper:]' '[:lower:]')
+    # ── systemd-networkd / systemd-resolved の誤指定ガード ──────────────────
     if echo "${_pkgs_lower}" | grep -qE 'systemd-networkd|systemd-resolved'; then
         warn "EXTRA_PACKAGES に systemd-networkd/systemd-resolved が含まれています。"
-        warn "これらは DISTRO_FEATURES:systemd が有効でないとビルドできません。"
-        warn "USE_SYSTEMD=true を .env に設定することを推奨します。"
+        warn "DISTRO_FEATURES:systemd が必要です。USE_SYSTEMD=true を推奨します。"
         if ! grep -q "DISTRO_FEATURES.*systemd" "${LOCAL_CONF}"; then
             cat >> "${LOCAL_CONF}" << 'SYSTEMDEOF'
 
@@ -409,6 +431,16 @@ VIRTUAL-RUNTIME_initscripts = ""
 SYSTEMDEOF
         fi
     fi
+
+    # rootパスワードを空にしない設定（デバッグ用）
+    if ! grep -q "EXTRA_IMAGE_FEATURES.*debug-tweaks" "${LOCAL_CONF}"; then
+        echo "" >> "${LOCAL_CONF}"
+        echo "# 開発用設定: rootパスワードなしログインを許可" >> "${LOCAL_CONF}"
+        echo "EXTRA_IMAGE_FEATURES += \"debug-tweaks\"" >> "${LOCAL_CONF}"
+    fi
+
+    # wic用: rootfs.tar.gz 出力
+    echo "IMAGE_FSTYPES:append = \" tar.gz\"" >> "${LOCAL_CONF}"
 
     log "local.conf のカスタマイズ完了"
 }
