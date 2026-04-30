@@ -662,10 +662,11 @@ if [[ -n "${TAR_FILE}" ]]; then
     cp -v "${TAR_FILE}" "/${WS}/yocto-rootfs.tar.gz"
     log "rootfs → /${WS}/yocto-rootfs.tar.gz"
 else
-    # ── フォールバック: wic からマウントなしで tar.gz を生成 ──────────────────
+    # ── フォールバック: wic を losetup + mount で tar.gz に変換 ───────────────
     # IMAGE_FSTYPES に tar.gz を指定済みだが、キャッシュヒット等で生成されなかった場合の保険。
-    # losetup/mount は使わず、fdisk でオフセットを計算して dd で rawに切り出す。
-    warn "tar.gz が見つかりません。wic から tar.gz を生成します（マウントなし）。"
+    # ※ 旧実装の debugfs rdump はシンボリックリンクや特殊ファイルをスキップし
+    #    etc/ 以下が欠落する問題があったため、losetup + mount 方式に変更。
+    warn "tar.gz が見つかりません。wic から tar.gz を生成します（losetup + mount）。"
     WIC_FILE=$(find "${DEPLOY_DIR}" -name "*rootfs*.wic" ! -name "*.bmap" 2>/dev/null | head -1 || true)
     if [[ -z "${WIC_FILE}" ]]; then
         err "rootfs.tar.gz も .wic も見つかりません。ビルドログを確認してください。"
@@ -673,47 +674,46 @@ else
 
     log "対象 wic: ${WIC_FILE}"
 
-    # python3 で MBR を直接解析してパーティションオフセットを取得
-    # fdisk/parted は /sbin にあり非rootユーザーのPATHに含まれない場合があるため python3 で代替
-    SECTOR_SIZE=512
-    read -r START_SECTOR TOTAL_SECTORS < <(python3 - "${WIC_FILE}" << 'PYEOF'
-import sys, struct
-with open(sys.argv[1], "rb") as f:
-    mbr = f.read(512)
-parts = []
-for i in range(4):
-    e = mbr[446 + i*16: 446 + i*16 + 16]
-    start = struct.unpack_from("<I", e, 8)[0]
-    size  = struct.unpack_from("<I", e, 12)[0]
-    if start > 0 and size > 0:
-        parts.append((start, size))
-parts.sort(key=lambda x: x[0])
-print(parts[-1][0], parts[-1][1])
-PYEOF
-)
+    # losetup でループデバイスにアタッチ（--partscan で全パーティションを自動認識）
+    LOOP_DEV=$(sudo losetup --find --show --partscan "${WIC_FILE}")
+    log "ループデバイス: ${LOOP_DEV}"
 
-    if [[ -z "${START_SECTOR}" || -z "${TOTAL_SECTORS}" || "${START_SECTOR}" == "0" ]]; then
-        err "wic のパーティション情報を取得できませんでした。wic ファイルが壊れていないか確認してください。"
+    # パーティション命名規則: /dev/loopNp1, /dev/loopNp2, ...
+    # x86_64 wic: p1=EFI(vfat), p2=rootfs(ext4)
+    # rpi wic   : p1=boot(vfat), p2=rootfs(ext4)
+    LOOP_PART="${LOOP_DEV}p2"
+
+    # パーティションデバイスが現れるまで最大5秒待機（udevd の遅延対策）
+    for _i in 1 2 3 4 5; do
+        [[ -b "${LOOP_PART}" ]] && break
+        sleep 1
+    done
+    if [[ ! -b "${LOOP_PART}" ]]; then
+        sudo losetup -d "${LOOP_DEV}" 2>/dev/null || true
+        err "rootfsパーティション ${LOOP_PART} が見つかりません。wic の構造を確認してください。"
     fi
 
-    log "rootfs パーティション: start=${START_SECTOR} sectors, size=${TOTAL_SECTORS} sectors"
-
-    # dd で ext4 パーティションを raw ファイルとして切り出し
-    RAW_EXT4=$(mktemp /tmp/rootfs_XXXXXX.ext4)
-    dd if="${WIC_FILE}" of="${RAW_EXT4}" \
-        bs="${SECTOR_SIZE}" skip="${START_SECTOR}" count="${TOTAL_SECTORS}" \
-        status=progress 2>&1 | tail -3
-
-    # debugfs (e2fsprogs) でマウントなし展開 → tar.gz
-    # /sbin/debugfs をフルパス指定して PATH 問題を回避、なければ PATH 経由でフォールバック
-    log "debugfs で ext4 → tar.gz に変換中..."
     ROOTFS_TMP=$(mktemp -d /tmp/rootfs_extract_XXXXXX)
-    DEBUGFS_CMD=$(command -v /sbin/debugfs || command -v debugfs)
-    "${DEBUGFS_CMD}" -R "rdump / ${ROOTFS_TMP}" "${RAW_EXT4}" 2>/dev/null
-    tar -czf "/${WS}/yocto-rootfs.tar.gz" -C "${ROOTFS_TMP}" .
-    rm -rf "${ROOTFS_TMP}" "${RAW_EXT4}"
+    # 読み取り専用マウント（wicを破壊しない）
+    sudo mount -o ro "${LOOP_PART}" "${ROOTFS_TMP}"
 
-    log "rootfs → /${WS}/yocto-rootfs.tar.gz (wic から生成、マウントなし)"
+    log "tar.gz 生成中 (${ROOTFS_TMP} → /${WS}/yocto-rootfs.tar.gz) ..."
+    # --numeric-owner: morning.sh 側の展開オプションと合わせる
+    # sudo: rootfs内にroot所有ファイルが存在するため権限昇格が必要
+    sudo tar -czf "/${WS}/yocto-rootfs.tar.gz" \
+        -C "${ROOTFS_TMP}" \
+        --numeric-owner \
+        .
+
+    # クリーンアップ
+    sudo umount "${ROOTFS_TMP}"
+    sudo losetup -d "${LOOP_DEV}"
+    rm -rf "${ROOTFS_TMP}"
+
+    # 所有者を yocto に戻す（後続処理や compose volume のアクセス権のため）
+    sudo chown yocto:yocto "/${WS}/yocto-rootfs.tar.gz"
+
+    log "rootfs → /${WS}/yocto-rootfs.tar.gz (wic から生成)"
 fi
 
 # 全成果物をコピー (.manifest / .json を除く)
