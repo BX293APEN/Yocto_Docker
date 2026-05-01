@@ -351,11 +351,17 @@ SSHEOF
     # openssl passwd -6 の出力文字種は [A-Za-z0-9./$ ] のみで
     # シングルクォート ' を含まないため EXTRA_USERS_PARAMS 内で安全に使える。
     local HASHED_PASSWORD
-    HASHED_PASSWORD=$(openssl passwd -6 "${ROOT_PASSWORD}")
+    # BitBake の local.conf では "$" が変数展開文字として解釈される。
+    # sha512crypt ハッシュは "$6$salt$hash" 形式で "$" を3つ含むため、
+    # BitBake がそれらを展開しようとして空文字列になり /etc/shadow に
+    # 無効なハッシュが書き込まれる (root:*:... = パスワードロック状態)。
+    # 対策: BitBake の "$" エスケープ記法 "$$" に置換してから local.conf へ書き込む。
+    HASHED_PASSWORD=$(openssl passwd -6 "${ROOT_PASSWORD}" | sed 's/\$/\$\$/g')
 
     cat >> "${LOCAL_CONF}" << EOF
 
 # root パスワード設定 (Yocto 公式: extrausers.bbclass)
+# ※ \$\$ は BitBake 内でリテラルの \$ として展開される
 INHERIT += "extrausers"
 EXTRA_USERS_PARAMS = "usermod -p '${HASHED_PASSWORD}' root;"
 EOF
