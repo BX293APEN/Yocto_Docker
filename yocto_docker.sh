@@ -338,34 +338,17 @@ SSHEOF
 
     # ── root パスワード (extrausers.bbclass 経由) ─────────────────────────────
     # Yocto 公式のユーザー管理クラスを使用する。
-    # ROOTFS_POSTPROCESS_COMMAND + カスタム bbclass の方式は
-    # グローバル INHERIT 経由では IMAGE レシピの do_rootfs に紐付かず
-    # パスワードが設定されないため、この方式に切り替えた。
-    #
-    # extrausers.bbclass は IMAGE レシピの do_rootfs 内で
-    # EXTRA_USERS_PARAMS のコマンドを確実に実行する Yocto 標準クラス。
-    # usermod -p にハッシュ済みパスワードを渡すことで
-    # fakeroot 環境・PAM 非依存で /etc/shadow を直接書き換える。
-    #
-    # ハッシュ化はビルド前にホスト側(Ubuntu 22.04)で行う。
-    # openssl passwd -6 の出力文字種は [A-Za-z0-9./$ ] のみで
-    # シングルクォート ' を含まないため EXTRA_USERS_PARAMS 内で安全に使える。
-    local HASHED_PASSWORD
-    # BitBake の local.conf では "$" が変数展開文字として解釈される。
-    # sha512crypt ハッシュは "$6$salt$hash" 形式で "$" を3つ含むため、
-    # BitBake がそれらを展開しようとして空文字列になり /etc/shadow に
-    # 無効なハッシュが書き込まれる (root:*:... = パスワードロック状態)。
-    # 対策: BitBake の "$" エスケープ記法 "$$" に置換してから local.conf へ書き込む。
-    HASHED_PASSWORD=$(openssl passwd -6 "${ROOT_PASSWORD}" | sed 's/\$/\$\$/g')
+    # Yoctoの usermod (shadow-native) には -P (大文字P) オプションがあり、
+    # これを使うと平文パスワードを渡すだけで内部で自動的に安全なハッシュに変換してくれる。
+    # 面倒な $ のエスケープやホスト側での openssl ハッシュ化は不要。
 
     cat >> "${LOCAL_CONF}" << EOF
 
 # root パスワード設定 (Yocto 公式: extrausers.bbclass)
-# ※ \$\$ は BitBake 内でリテラルの \$ として展開される
 INHERIT += "extrausers"
-EXTRA_USERS_PARAMS = "usermod -p '${HASHED_PASSWORD}' root;"
+EXTRA_USERS_PARAMS = "usermod -P '${ROOT_PASSWORD}' root;"
 EOF
-    log "root パスワードを extrausers 経由で設定しました"
+    log "root パスワードを extrausers (-P オプション) 経由で設定しました"
 
     # ── ネットワーク設定用 bbclass ────────────────────────────────────────────
     # configure_network() はシェル関数のため local.conf には直接書けない。
