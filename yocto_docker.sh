@@ -286,30 +286,27 @@ _patch_local_conf() {
     echo "DEFAULT_TIMEZONE = \"${TIME_ZONE}\""      >> "${LOCAL_CONF}"
     echo "IMAGE_LINGUAS = \"en-us\""                >> "${LOCAL_CONF}"
 
-    # ── Docker 環境: BitBake ネットワークサンドボックス無効化 ─────────────────
-    # 【問題】BitBake (Scarthgap/5.0 以降) はタスク実行時に user namespace を使って
-    #         ネットワークを分離する。この処理は /proc/self/uid_map への書き込みで
-    #         実現されるが、Docker コンテナ内では新規 user namespace の作成が
-    #         制限されるため PermissionError (EPERM) になりビルドが失敗する。
+    # ── Docker 環境: BitBake user namespace サンドボックス無効化 ──────────────
+    # Ubuntu 24.04 は unprivileged user namespace をカーネル + AppArmor の2段で制限する。
+    # BitBake (Scarthgap/5.0+) はタスク実行時と起動時チェックの両方で user namespace を使う。
     #
-    # 【注意】これは「ビルド中にフェッチタスクがネットワークを使えなくする」機能の
-    #         無効化であり、ビルド済み Yocto イメージ上のネットワーク動作とは
-    #         完全に無関係。rootfs の NW 設定は NETWORK_PROTO / NM 設定が担う。
+    # [起動時] BitBake が unshare --user で user namespace の可否を検査する。
+    #          → compose.yml の sysctl / seccomp:unconfined で解消済み。
+    # [実行時] タスクが /proc/self/uid_map に書き込んでネットワークを分離する。
+    #          → BB_TASK_NETWORK = "1" で BitBake 側のサンドボックスをスキップする。
     #
-    # BB_TASK_NETWORK = "1"  … タスク実行時のネットワーク分離をスキップ (Scarthgap+)
-    # BB_UNSHARE_DISABLED    … user namespace による unshare 自体を無効化 (保険)
+    # 【注意】Yocto イメージ上のネットワーク動作とは完全に無関係。
+    #         rootfs の NW 設定は NETWORK_PROTO / NetworkManager 設定が担う。
     #
-    # Kirkstone (4.0) 以前では BB_TASK_NETWORK 変数が存在しないが、
-    # 未知の変数は警告なく無視されるため記述しても問題ない。
+    # Kirkstone (4.0) 以前は BB_TASK_NETWORK が存在しないが未知変数は無視されるため無害。
     cat >> "${LOCAL_CONF}" << 'SANDBOXEOF'
 
 # Docker コンテナ内での user namespace 制限による PermissionError 回避
 # (BitBake のネットワークサンドボックス機能を無効化 — Yocto イメージのNW動作には無影響)
 BB_TASK_NETWORK = "1"
-BB_UNSHARE_DISABLED = "1"
-# ↑ Kirkstone 以前では不要だがあっても無害。Scarthgap 未満に戻す場合はコメントアウト可。
+# ↑ Scarthgap (5.0) 以降で有効。Kirkstone 以前に戻す場合はコメントアウト可。
 SANDBOXEOF
-    log "BitBake ネットワークサンドボックスを無効化しました (BB_TASK_NETWORK / BB_UNSHARE_DISABLED)"
+    log "BitBake ネットワークサンドボックスを無効化しました (BB_TASK_NETWORK)"
 
     # ── grub (x86_64 のみ: grub-mkconfig 実行に必要) ─────────────────────────
     # morning.sh は chroot 内で grub-mkconfig を呼ぶため、
