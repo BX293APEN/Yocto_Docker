@@ -35,9 +35,6 @@ services:
     stop_grace_period: 24h  # Yoctoは長時間ビルドになるため余裕を持たせる
 
     environment:
-      # ── コンテナユーザー ──
-      - HOST_UID=${HOST_UID:-1000}
-      - HOST_GID=${HOST_GID:-1000}
       # ── ビルド設定 ──
       - YOCTO_RELEASE=${YOCTO_RELEASE}
       - DEVICE_PROFILE=${DEVICE_PROFILE}

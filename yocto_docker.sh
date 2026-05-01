@@ -65,7 +65,7 @@ ROOT_PASSWORD="${ROOT_PASSWORD:-password}"
 LOGFILE="/${WS}/build.log"
 sudo mkdir -p "/${WS}"
 sudo chmod 777 "/${WS}"
-sudo chown "${HOST_UID:-1000}:${HOST_GID:-1000}" "/${WS}"
+sudo chown yocto:yocto "/${WS}"
 
 cd /${WS}
 exec > >(tee -a "${LOGFILE}") 2>&1
@@ -800,8 +800,8 @@ PYEOF
     sudo losetup -d "${LOOP_DEV}"
     rm -rf "${ROOTFS_TMP}"
 
-    # 所有者をホストユーザーと一致させる（compose volume 経由でホストからアクセスできるよう）
-    sudo chown "${HOST_UID:-1000}:${HOST_GID:-1000}" "/${WS}/yocto-rootfs.tar.gz"
+    # 所有者を yocto に戻す（後続処理や compose volume のアクセス権のため）
+    sudo chown yocto:yocto "/${WS}/yocto-rootfs.tar.gz"
 
     log "rootfs → /${WS}/yocto-rootfs.tar.gz (wic から生成)"
 fi
