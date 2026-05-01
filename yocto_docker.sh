@@ -336,42 +336,48 @@ SSHEOF
         echo "IMAGE_INSTALL:append = \" ${PKGS}\"" >> "${LOCAL_CONF}"
     fi
 
-    # ── root パスワード (.bbclass 経由) ──────────────────────────────────────
-    # BitBake の conf パーサーはシェル関数構文を解釈できないため
-    # 関数定義を .bbclass に分離し、local.conf からは inherit のみ行う。
+    # ── root パスワード (extrausers.bbclass 経由) ─────────────────────────────
+    # Yocto 公式のユーザー管理クラスを使用する。
+    # ROOTFS_POSTPROCESS_COMMAND + カスタム bbclass の方式は
+    # グローバル INHERIT 経由では IMAGE レシピの do_rootfs に紐付かず
+    # パスワードが設定されないため、この方式に切り替えた。
+    #
+    # extrausers.bbclass は IMAGE レシピの do_rootfs 内で
+    # EXTRA_USERS_PARAMS のコマンドを確実に実行する Yocto 標準クラス。
+    # usermod -p にハッシュ済みパスワードを渡すことで
+    # fakeroot 環境・PAM 非依存で /etc/shadow を直接書き換える。
+    #
+    # ハッシュ化はビルド前にホスト側(Ubuntu 22.04)で行う。
+    # openssl passwd -6 の出力文字種は [A-Za-z0-9./$ ] のみで
+    # シングルクォート ' を含まないため EXTRA_USERS_PARAMS 内で安全に使える。
+    local HASHED_PASSWORD
+    HASHED_PASSWORD=$(openssl passwd -6 "${ROOT_PASSWORD}")
+
+    cat >> "${LOCAL_CONF}" << EOF
+
+# root パスワード設定 (Yocto 公式: extrausers.bbclass)
+INHERIT += "extrausers"
+EXTRA_USERS_PARAMS = "usermod -p '${HASHED_PASSWORD}' root;"
+EOF
+    log "root パスワードを extrausers 経由で設定しました"
+
+    # ── ネットワーク設定用 bbclass ────────────────────────────────────────────
+    # configure_network() はシェル関数のため local.conf には直接書けない。
+    # カスタム bbclass に定義し BBPATH 経由で読み込む。
+    # (パスワード設定は extrausers に移行済みのためここでは NW 設定のみ)
     local BBCLASS_DIR="${BUILD_DIR}/classes"
     local CUSTOM_BBCLASS="${BBCLASS_DIR}/yocto-docker-custom.bbclass"
     sudo mkdir -p "${BBCLASS_DIR}"
     sudo chmod 777 "${BBCLASS_DIR}"
 
-    # パスワードのハッシュ化をここ(Dockerホスト側のbash)で行う。
-    # bbclass内(Yocto fakeroot環境)での openssl 呼び出しや
-    # chpasswd -R (PAM依存でfakeroot下では失敗する) を排除し、
-    # shadowへの書き込みを純粋な sed 1行に単純化する。
-    #
-    # また openssl passwd -6 の出力($6$salt$hash)をシェル変数に受けてから
-    # bbclassに埋め込むことで、sed のreplacement文字列内での
-    # $ のシェル再展開を完全に回避する。
-    local HASHED_PASSWORD
-    HASHED_PASSWORD=$(openssl passwd -6 "${ROOT_PASSWORD}")
-
-    cat > "${CUSTOM_BBCLASS}" << BBCLASSEOF
-# yocto-docker-custom.bbclass — Docker ビルド時に自動生成
-# (パスワードハッシュはビルド前にホスト側で生成済み)
-
-set_root_password () {
-    if [ -f "\${IMAGE_ROOTFS}/etc/shadow" ]; then
-        sed -i 's|^root:[^:]*:|root:${HASHED_PASSWORD}:|' \
-            "\${IMAGE_ROOTFS}/etc/shadow"
-    fi
-}
-
-ROOTFS_POSTPROCESS_COMMAND:append = " set_root_password;"
+    # bbclass の初期化
+    cat > "${CUSTOM_BBCLASS}" << 'BBCLASSEOF'
+# yocto-docker-custom.bbclass — Docker ビルド時に自動生成 (ネットワーク設定用)
 BBCLASSEOF
 
     cat >> "${LOCAL_CONF}" << EOF
 
-# カスタマイズクラス (root パスワード / ネットワーク設定)
+# ネットワーク設定用カスタム bbclass
 INHERIT += "yocto-docker-custom"
 BBPATH:prepend := "${BUILD_DIR}:"
 EOF
@@ -516,8 +522,8 @@ SYSTEMDEOF
     # ── 開発用設定 ────────────────────────────────────────────────────────────
     # debug-tweaks は無効化する。
     # 有効にすると /etc/shadow の root エントリを空パスワードに強制上書きし、
-    # set_root_password で設定したパスワードが消えてログイン不能になるため。
-    # パスワードは set_root_password (ROOTFS_POSTPROCESS_COMMAND) で設定済み。
+    # extrausers で設定したパスワードが消えてログイン不能になるため。
+    # パスワードは extrausers (EXTRA_USERS_PARAMS) で設定済み。
 
     # ── ソースミラー ──────────────────────────────────────────────────────────
     # .env の PREMIRRORS / MIRRORS をスペース区切りペアで指定する。
@@ -642,7 +648,7 @@ done
 # ─────────────────────────────────────────────
 step "6. rootfs カスタマイズ確認"
 
-log "ROOT_PASSWORD  : (設定済み → IMAGE_ROOTFS_POSTPROCESS_COMMAND で反映)"
+log "ROOT_PASSWORD  : (設定済み → extrausers EXTRA_USERS_PARAMS で反映)"
 log "NETWORK_PROTO  : ${NETWORK_PROTO}"
 if [[ "${NETWORK_PROTO}" == "static" ]]; then
     log "STATIC_IP      : ${STATIC_IP}"
