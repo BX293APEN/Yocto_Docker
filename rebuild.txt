@@ -1,4 +1,0 @@
-rm -rf ./build/build_yocto/tmp-glibc
-rm -rf ./build/tmp
-
-docker compose up --build -d
