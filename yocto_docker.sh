@@ -530,6 +530,15 @@ SYSTEMDEOF
     # 有効にすると /etc/shadow の root エントリを空パスワードに強制上書きし、
     # extrausers で設定したパスワードが消えてログイン不能になるため。
     # パスワードは extrausers (EXTRA_USERS_PARAMS) で設定済み。
+    #
+    # oe-init-build-env が生成するデフォルト local.conf には
+    #   EXTRA_IMAGE_FEATURES ?= "debug-tweaks"
+    # が含まれる。sed で該当行を空文字列に置換して無効化する。
+    # (append ではなく sed 置換にする理由: ?= はデフォルト代入なので
+    #  後から EXTRA_IMAGE_FEATURES = "" を追記しても上書きできない場合がある)
+    sed -i 's/^EXTRA_IMAGE_FEATURES[[:space:]]*[?:]*=[[:space:]]*"debug-tweaks"/EXTRA_IMAGE_FEATURES = ""/' \
+        "${LOCAL_CONF}"
+    log "debug-tweaks を無効化しました (extrausers のパスワードが上書きされるのを防止)"
 
     # ── ソースミラー ──────────────────────────────────────────────────────────
     # .env の PREMIRRORS / MIRRORS をスペース区切りペアで指定する。
