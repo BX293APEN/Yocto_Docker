@@ -31,12 +31,6 @@ services:
       - seccomp:unconfined     # seccomp フィルタも外す (unshare syscall をブロックしないため)
     userns_mode: host          # ホストのuser namespaceを使用
     pid: host
-    sysctls:
-      # Ubuntu 24.04 はカーネルレベルで非特権 user namespace を制限している。
-      # privileged: true でもコンテナ内に引き継がれるため sysctl で明示的に解除する。
-      # BitBake は起動時に unshare --user で user namespace の可否を検査しており、
-      # この制限が残っていると "User namespaces are not usable" で即終了する。
-      kernel.apparmor_restrict_unprivileged_userns: 0
 
     restart: no             # ビルド完了後に自動再起動しない
     stop_grace_period: 24h  # Yoctoは長時間ビルドになるため余裕を持たせる
