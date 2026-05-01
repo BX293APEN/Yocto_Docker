@@ -481,11 +481,10 @@ SYSTEMDEOF
     fi
 
     # ── 開発用設定 ────────────────────────────────────────────────────────────
-    cat >> "${LOCAL_CONF}" << 'DEVEOF'
-
-# 開発用設定: root パスワードなしログインを許可
-EXTRA_IMAGE_FEATURES += "debug-tweaks"
-DEVEOF
+    # debug-tweaks は無効化する。
+    # 有効にすると /etc/shadow の root エントリを空パスワードに強制上書きし、
+    # set_root_password で設定したパスワードが消えてログイン不能になるため。
+    # パスワードは set_root_password (ROOTFS_POSTPROCESS_COMMAND) で設定済み。
 
     # ── ソースミラー ──────────────────────────────────────────────────────────
     # .env の PREMIRRORS / MIRRORS をスペース区切りペアで指定する。
