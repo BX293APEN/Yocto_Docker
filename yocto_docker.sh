@@ -286,6 +286,18 @@ _patch_local_conf() {
     echo "DEFAULT_TIMEZONE = \"${TIME_ZONE}\""      >> "${LOCAL_CONF}"
     echo "IMAGE_LINGUAS = \"en-us\""                >> "${LOCAL_CONF}"
 
+    # ── grub (x86_64 のみ: grub-mkconfig 実行に必要) ─────────────────────────
+    # morning.sh は chroot 内で grub-mkconfig を呼ぶため、
+    # grub / grub-efi が rootfs に含まれている必要がある。
+    if [[ "${MACHINE}" == "genericx86-64" ]]; then
+        cat >> "${LOCAL_CONF}" << 'GRUBEOF'
+
+# x86_64: grub-mkconfig 実行のため grub / grub-efi を組み込む
+IMAGE_INSTALL:append = " grub grub-efi grub-efi-x86-64"
+GRUBEOF
+        log "x86_64: grub / grub-efi を IMAGE_INSTALL に追加しました"
+    fi
+
     # ── SSH ───────────────────────────────────────────────────────────────────
     if [[ "${ENABLE_SSH}" == "true" ]]; then
         cat >> "${LOCAL_CONF}" << 'SSHEOF'
@@ -755,6 +767,8 @@ PYEOF
     sudo tar -czf "/${WS}/yocto-rootfs.tar.gz" \
         -C "${ROOTFS_TMP}" \
         --numeric-owner \
+        --xattrs \
+        --xattrs-include='*.*' \
         .
 
     # クリーンアップ
