@@ -116,8 +116,8 @@ echo "============================================"
 # ─────────────────────────────────────────────
 [[ "$EUID" -eq 0 ]] || err "root権限が必要です: sudo bash morning.sh"
 
-for cmd in dd parted mkfs.vfat mkfs.ext4 losetup mount tar blkid partprobe grub-install; do
-    command -v "$cmd" &>/dev/null || err "必要なコマンドが見つかりません: $cmd (apt install util-linux parted dosfstools e2fsprogs grub-efi-amd64-bin grub-common)"
+for cmd in dd parted mkfs.vfat mkfs.ext4 losetup mount tar blkid partprobe; do
+    command -v "$cmd" &>/dev/null || err "必要なコマンドが見つかりません: $cmd (apt install util-linux parted dosfstools e2fsprogs)"
 done
 
 if [[ ! -f "${DONE_FLAG}" ]]; then
@@ -283,42 +283,71 @@ if [[ "${DEVICE_PROFILE}" == "x86_64" ]]; then
     log "  /boot の内容確認:"
     ls -la "${MOUNT_ROOT}/boot/" 2>/dev/null || warn "  /boot が空です"
 
-    # ── grub-install をホスト側から実行（Gentooと同じ方式）───────
-    # Gentooでの動作実績: chroot内のgrub-installではなく
-    # ホストのgrub-installを使って直接EFIパーティションに書き込む。
-    # これによりrootfs内にgrub-installがなくても確実に動作する。
-    log "  grub-install 実行中 (ホスト grub-install → EFI パーティション)..."
+    # ── grub-install + grub-mkconfig ─────────────────────────────
+    # 優先順位:
+    #   1. rootfs 内の grub-install を chroot で実行（.env に grub を追加した場合）
+    #   2. ホスト側の grub-install を直接実行（フォールバック）
+    #      → ホストに grub-efi-amd64-bin が必要: sudo apt install grub-efi-amd64-bin grub-common
+    # grub-mkconfig は常に chroot 内で実行してカーネルを自動検出する。
 
-    if ! command -v grub-install &>/dev/null; then
-        err "  ホストに grub-install が見つかりません。\n  sudo apt install grub-efi-amd64-bin grub-common を実行してください。"
+    ROOTFS_GRUB_INSTALL=""
+    for _p in usr/bin/grub-install usr/sbin/grub-install; do
+        if [[ -f "${MOUNT_ROOT}/${_p}" ]]; then
+            ROOTFS_GRUB_INSTALL="/${_p}"
+            break
+        fi
+    done
+
+    if [[ -n "${ROOTFS_GRUB_INSTALL}" ]]; then
+        # ── パターン1: rootfs 内の grub-install を chroot で実行 ──
+        log "  grub-install 実行中 (chroot: ${ROOTFS_GRUB_INSTALL})..."
+        chroot "${MOUNT_ROOT}" /usr/bin/env -i \
+            HOME=/root \
+            PATH=/usr/bin:/usr/sbin:/bin:/sbin \
+            GRUB_INSTALL_BIN="${ROOTFS_GRUB_INSTALL}" \
+            /bin/bash << 'GRUB_INSTALL_EOF'
+set -e
+${GRUB_INSTALL_BIN} \
+    --target=x86_64-efi \
+    --efi-directory=/boot/efi \
+    --boot-directory=/boot \
+    --bootloader-id=yocto \
+    --removable \
+    --no-nvram
+echo "[CHROOT] grub-install 完了"
+GRUB_INSTALL_EOF
+        log "  grub-install (chroot) 完了"
+
+    elif command -v grub-install &>/dev/null && \
+         [[ -d /usr/lib/grub/x86_64-efi ]]; then
+        # ── パターン2: ホスト側の grub-install を直接実行 ──────────
+        log "  grub-install 実行中 (ホスト側フォールバック)..."
+        grub-install \
+            --target=x86_64-efi \
+            --efi-directory="${MOUNT_ROOT}/boot/efi" \
+            --boot-directory="${MOUNT_ROOT}/boot" \
+            --bootloader-id=yocto \
+            --removable \
+            --no-nvram
+        log "  grub-install (ホスト) 完了"
+
+    else
+        err "  grub-install が見つかりません。\n  対処法A（推奨）: .env の EXTRA_PACKAGES に grub を追加して再ビルド\n  対処法B（即時）: sudo apt install grub-efi-amd64-bin grub-common"
     fi
 
-    grub-install \
-        --target=x86_64-efi \
-        --efi-directory="${MOUNT_ROOT}/boot/efi" \
-        --boot-directory="${MOUNT_ROOT}/boot" \
-        --bootloader-id=yocto \
-        --removable \
-        --no-nvram
-    log "  grub-install 完了"
-
-    # ── chroot 内で grub-mkconfig（Gentooと同じ方式）────────────
-    # grub-mkconfig はカーネルを自動検出して grub.cfg を生成するため
-    # 手動でカーネル名を探す必要がなく、確実に正しい grub.cfg が作られる。
+    # ── chroot 内で grub-mkconfig ────────────────────────────────
+    # カーネルを自動検出して grub.cfg を生成する（手動指定不要）
     log "  grub-mkconfig 実行中 (chroot)..."
     chroot "${MOUNT_ROOT}" /usr/bin/env -i \
         HOME=/root \
         PATH=/usr/bin:/usr/sbin:/bin:/sbin \
         /bin/bash << 'GRUB_EOF'
 set -e
-
-# grub-mkconfig でカーネルを自動検出して grub.cfg 生成
 mkdir -p /boot/grub
 grub-mkconfig -o /boot/grub/grub.cfg
-
 echo "[CHROOT] grub-mkconfig 完了"
 echo "[CHROOT] 生成された grub.cfg のlinux行:"
-grep "linux\b" /boot/grub/grub.cfg | head -3 || true
+grep "linux" /boot/grub/grub.cfg | head -3 || true
 GRUB_EOF
 
     log "  grub.cfg 生成完了 (linux 行確認):"
