@@ -344,19 +344,30 @@ SSHEOF
     sudo mkdir -p "${BBCLASS_DIR}"
     sudo chmod 777 "${BBCLASS_DIR}"
 
-    # ヒアドキュメントは '' で変数展開を抑止し、sed でプレースホルダーを置換する
-    cat > "${CUSTOM_BBCLASS}" << 'BBCLASSEOF'
+    # パスワードのハッシュ化をここ(Dockerホスト側のbash)で行う。
+    # bbclass内(Yocto fakeroot環境)での openssl 呼び出しや
+    # chpasswd -R (PAM依存でfakeroot下では失敗する) を排除し、
+    # shadowへの書き込みを純粋な sed 1行に単純化する。
+    #
+    # また openssl passwd -6 の出力($6$salt$hash)をシェル変数に受けてから
+    # bbclassに埋め込むことで、sed のreplacement文字列内での
+    # $ のシェル再展開を完全に回避する。
+    local HASHED_PASSWORD
+    HASHED_PASSWORD=$(openssl passwd -6 "${ROOT_PASSWORD}")
+
+    cat > "${CUSTOM_BBCLASS}" << BBCLASSEOF
 # yocto-docker-custom.bbclass — Docker ビルド時に自動生成
+# (パスワードハッシュはビルド前にホスト側で生成済み)
 
 set_root_password () {
-    echo "root:__ROOT_PASSWORD__" | chpasswd -R ${IMAGE_ROOTFS} 2>/dev/null || \
-        sed -i "s|^root:[^:]*:|root:$(openssl passwd -6 '__ROOT_PASSWORD__'):|" \
-            ${IMAGE_ROOTFS}/etc/shadow || true
+    if [ -f "\${IMAGE_ROOTFS}/etc/shadow" ]; then
+        sed -i 's|^root:[^:]*:|root:${HASHED_PASSWORD}:|' \
+            "\${IMAGE_ROOTFS}/etc/shadow"
+    fi
 }
 
 ROOTFS_POSTPROCESS_COMMAND:append = " set_root_password;"
 BBCLASSEOF
-    sed -i "s|__ROOT_PASSWORD__|${ROOT_PASSWORD}|g" "${CUSTOM_BBCLASS}"
 
     cat >> "${LOCAL_CONF}" << EOF
 
