@@ -9,6 +9,10 @@ FROM ubuntu:22.04
 ARG WS
 ARG ENTRY_DIR
 ARG ENTRY_POINT
+# ホスト側の UID/GID に合わせることで ./build ボリュームの権限問題を解消する。
+# compose.yml 経由で渡す。デフォルトは 1000 (多くの Linux 環境の一般ユーザー)。
+ARG HOST_UID=1000
+ARG HOST_GID=1000
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -65,7 +69,9 @@ RUN apt-get update && \
     locale-gen en_US.UTF-8 && \
     update-locale LANG=en_US.UTF-8 && \
     # ビルドユーザー作成(Yoctoはrootでのビルドを禁止している)
-    useradd -m -s /bin/bash -G sudo yocto && \
+    # HOST_UID/HOST_GID をホストと揃えることで ./build ボリュームの chmod 警告を解消する
+    groupadd -g ${HOST_GID} yocto && \
+    useradd -m -s /bin/bash -u ${HOST_UID} -g ${HOST_GID} -G sudo yocto && \
     echo "yocto ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers && \
     # ワークスペース作成
     mkdir -p /${ENTRY_DIR} && \

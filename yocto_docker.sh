@@ -286,6 +286,31 @@ _patch_local_conf() {
     echo "DEFAULT_TIMEZONE = \"${TIME_ZONE}\""      >> "${LOCAL_CONF}"
     echo "IMAGE_LINGUAS = \"en-us\""                >> "${LOCAL_CONF}"
 
+    # ── Docker 環境: BitBake ネットワークサンドボックス無効化 ─────────────────
+    # 【問題】BitBake (Scarthgap/5.0 以降) はタスク実行時に user namespace を使って
+    #         ネットワークを分離する。この処理は /proc/self/uid_map への書き込みで
+    #         実現されるが、Docker コンテナ内では新規 user namespace の作成が
+    #         制限されるため PermissionError (EPERM) になりビルドが失敗する。
+    #
+    # 【注意】これは「ビルド中にフェッチタスクがネットワークを使えなくする」機能の
+    #         無効化であり、ビルド済み Yocto イメージ上のネットワーク動作とは
+    #         完全に無関係。rootfs の NW 設定は NETWORK_PROTO / NM 設定が担う。
+    #
+    # BB_TASK_NETWORK = "1"  … タスク実行時のネットワーク分離をスキップ (Scarthgap+)
+    # BB_UNSHARE_DISABLED    … user namespace による unshare 自体を無効化 (保険)
+    #
+    # Kirkstone (4.0) 以前では BB_TASK_NETWORK 変数が存在しないが、
+    # 未知の変数は警告なく無視されるため記述しても問題ない。
+    cat >> "${LOCAL_CONF}" << 'SANDBOXEOF'
+
+# Docker コンテナ内での user namespace 制限による PermissionError 回避
+# (BitBake のネットワークサンドボックス機能を無効化 — Yocto イメージのNW動作には無影響)
+BB_TASK_NETWORK = "1"
+BB_UNSHARE_DISABLED = "1"
+# ↑ Kirkstone 以前では不要だがあっても無害。Scarthgap 未満に戻す場合はコメントアウト可。
+SANDBOXEOF
+    log "BitBake ネットワークサンドボックスを無効化しました (BB_TASK_NETWORK / BB_UNSHARE_DISABLED)"
+
     # ── grub (x86_64 のみ: grub-mkconfig 実行に必要) ─────────────────────────
     # morning.sh は chroot 内で grub-mkconfig を呼ぶため、
     # grub / grub-efi が rootfs に含まれている必要がある。

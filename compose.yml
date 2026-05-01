@@ -17,6 +17,10 @@ services:
         WS:          ${WS}
         ENTRY_DIR:   ${ENTRY_DIR}
         ENTRY_POINT: ${ENTRY_POINT}
+        # ホストの UID/GID を渡す (./build ボリュームの権限を yocto ユーザーと一致させる)
+        # .env に id -u / id -g の値を設定するか、未設定時はデフォルト 1000 が使われる
+        HOST_UID:    ${HOST_UID:-1000}
+        HOST_GID:    ${HOST_GID:-1000}
 
     volumes:
       - ${VOLUME}:/${WS}   # ホスト ./build → コンテナ内 /build
