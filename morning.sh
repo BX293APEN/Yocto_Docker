@@ -278,16 +278,42 @@ if [[ "${DEVICE_PROFILE}" == "x86_64" ]]; then
 
     # ── grub.cfg 生成（プレースホルダ→sed 方式）─────────────────
     log "  grub.cfg 生成中..."
-    KERNEL=$(ls "${MOUNT_ROOT}/boot/vmlinuz-"* 2>/dev/null | head -1 | xargs basename 2>/dev/null || true)
+
+    # Yoctoのカーネルファイル名は vmlinuz-* ではなく bzImage が標準。
+    # 優先順位: bzImage → bzImage-* → vmlinuz → vmlinuz-* → zImage → Image
+    KERNEL=""
+    for _pat in \
+        "bzImage" \
+        "bzImage-"* \
+        "vmlinuz" \
+        "vmlinuz-"* \
+        "zImage" \
+        "Image" \
+    ; do
+        _found=$(ls "${MOUNT_ROOT}/boot/${_pat}" 2>/dev/null | head -1 || true)
+        if [[ -n "${_found}" ]] && [[ -f "${_found}" ]]; then
+            # シンボリックリンクの場合は実体ファイル名を使う
+            if [[ -L "${_found}" ]]; then
+                _found="$(readlink -f "${_found}")"
+            fi
+            KERNEL="$(basename "${_found}")"
+            break
+        fi
+    done
+
     if [[ -z "${KERNEL}" ]]; then
-        warn "  /boot/vmlinuz-* が見つかりません。grub.cfg のカーネル行はプレースホルダのままです。"
-        KERNEL="vmlinuz"
+        err "  /boot/ にカーネルが見つかりません。\n" \
+            "  展開された /boot/ の内容: $(ls "${MOUNT_ROOT}/boot/" 2>/dev/null || echo '空')\n" \
+            "  rootfs が正しくビルドされているか確認してください。"
     fi
     log "  カーネル: ${KERNEL}  rootfs UUID: ${ROOTFS_UUID}"
 
+    # initrd / initramfs の検索（Yoctoは通常 initrd なし。あれば使う）
     INITRD_LINE=""
-    INITRD_FILE=$(ls "${MOUNT_ROOT}/boot/initrd-"* "${MOUNT_ROOT}/boot/initramfs-"* 2>/dev/null \
-                  | head -1 | xargs basename 2>/dev/null || true)
+    INITRD_FILE=$(ls "${MOUNT_ROOT}/boot/initrd-"* \
+                     "${MOUNT_ROOT}/boot/initramfs-"* \
+                     "${MOUNT_ROOT}/boot/initrd.img-"* \
+                  2>/dev/null | head -1 | xargs basename 2>/dev/null || true)
     if [[ -n "${INITRD_FILE}" ]]; then
         INITRD_LINE="    initrd /boot/${INITRD_FILE}"
         log "  initrd: ${INITRD_FILE}"
