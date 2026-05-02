@@ -818,6 +818,90 @@ PYEOF
     log "rootfs → /${WS}/yocto-rootfs.tar.gz (wic から生成)"
 fi
 
+# ─────────────────────────────────────────────
+# 8b. /etc/shadow の root パスワード確認・フォールバック書き込み
+#
+# 【フォールバック3段構成】
+#   Stage-1: extrausers.bbclass の usermod -P が正常動作 → そのまま通過（何もしない）
+#   Stage-2: tar.gz 内の shadow を確認し、* または ! なら
+#            openssl passwd -6 でハッシュ化して tar.gz を展開→書き換え→再圧縮
+#
+# 【shadow パッケージについて】
+#   core-image-full-cmdline は shadow パッケージをデフォルトで含むため
+#   EXTRA_PACKAGES への追加は不要。
+#   extrausers.bbclass は shadow-native (ホスト側ビルドツール) を使って
+#   do_rootfs フェーズに usermod を実行するため、rootfs への shadow インストール有無に
+#   関わらず動作するはずだが、scarthgap では usermod -P が silent fail するケースがある。
+# ─────────────────────────────────────────────
+_ROOTFS_TAR="/${WS}/yocto-rootfs.tar.gz"
+if [[ -f "${_ROOTFS_TAR}" && -n "${ROOT_PASSWORD}" ]]; then
+    log "shadow パスワード確認・フォールバック処理を開始します..."
+
+    # Stage-1 確認: extrausers が正常に動作しているか
+    _CURRENT_HASH=$(tar -xOf "${_ROOTFS_TAR}" ./etc/shadow 2>/dev/null \
+        | grep '^root:' | cut -d: -f2 || true)
+
+    if [[ "${_CURRENT_HASH}" == "*" || "${_CURRENT_HASH}" == "!" || -z "${_CURRENT_HASH}" ]]; then
+        warn "Stage-1 (extrausers) でパスワード未設定。Stage-2 フォールバックを実行します。"
+
+        # Stage-2: openssl で SHA-512 ハッシュ生成 → tar.gz 展開→書き換え→再圧縮
+        if command -v openssl &>/dev/null; then
+            _SALT=$(openssl rand -base64 12 | tr -dc 'a-zA-Z0-9' | head -c 16)
+            _HASHED=$(openssl passwd -6 -salt "${_SALT}" "${ROOT_PASSWORD}")
+        else
+            # openssl が無い場合は Python3 で代替
+            _HASHED=$(python3 -c "
+import crypt, os, base64
+salt = base64.b64encode(os.urandom(12)).decode('ascii')[:16]
+print(crypt.crypt('${ROOT_PASSWORD}', '\$6\$' + salt))
+")
+        fi
+
+        if [[ -z "${_HASHED}" ]]; then
+            err "Stage-2: パスワードのハッシュ化に失敗しました。openssl または python3 が必要です。"
+        fi
+
+        # 展開ディレクトリを sudo で確実に作成
+        _ROOTFS_TMP_PW=$(mktemp -d /tmp/rootfs_pw_XXXXXX)
+        sudo mkdir -p "${_ROOTFS_TMP_PW}"
+        sudo chmod 777 "${_ROOTFS_TMP_PW}"
+
+        log "Stage-2: rootfs を一時展開中: ${_ROOTFS_TMP_PW}"
+        sudo tar -xzf "${_ROOTFS_TAR}" -C "${_ROOTFS_TMP_PW}" --numeric-owner 2>/dev/null
+
+        if [[ ! -f "${_ROOTFS_TMP_PW}/etc/shadow" ]]; then
+            sudo rm -rf "${_ROOTFS_TMP_PW}"
+            err "Stage-2: 展開した rootfs に /etc/shadow が見つかりません。"
+        fi
+
+        # root 行のハッシュ部分のみ書き換え（他ユーザーは保持）
+        sudo sed -i "s|^root:[^:]*:|root:${_HASHED}:|" "${_ROOTFS_TMP_PW}/etc/shadow"
+
+        # 書き換え後の確認ログ
+        _NEW_HASH=$(sudo grep '^root:' "${_ROOTFS_TMP_PW}/etc/shadow" | cut -d: -f2)
+        log "Stage-2: shadow 書き換え後 root ハッシュ先頭: ${_NEW_HASH:0:10}..."
+
+        # 再圧縮（.tmp に書いてからアトミックに mv）
+        log "Stage-2: rootfs を再圧縮中..."
+        sudo tar -czf "${_ROOTFS_TAR}.tmp" \
+            -C "${_ROOTFS_TMP_PW}" \
+            --numeric-owner \
+            --xattrs \
+            --xattrs-include='*.*' \
+            .
+        sudo mv "${_ROOTFS_TAR}.tmp" "${_ROOTFS_TAR}"
+        sudo chown yocto:yocto "${_ROOTFS_TAR}" 2>/dev/null || true
+
+        sudo rm -rf "${_ROOTFS_TMP_PW}"
+        log "✅ Stage-2: /etc/shadow の root パスワードを書き換えました (SHA-512)"
+    else
+        log "✅ Stage-1 (extrausers) でパスワードが正常に設定されています (Stage-2 スキップ)"
+    fi
+else
+    [[ ! -f "${_ROOTFS_TAR}" ]] && warn "rootfs.tar.gz が見つからないため shadow 書き換えをスキップします"
+    [[ -z "${ROOT_PASSWORD}" ]]  && warn "ROOT_PASSWORD が未設定のため shadow 書き換えをスキップします"
+fi
+
 # 全成果物をコピー (.manifest / .json を除く)
 find "${DEPLOY_DIR}" -maxdepth 1 -type f \
     ! -name "*.manifest" \
