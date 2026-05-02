@@ -382,7 +382,8 @@ EOF
         cat >> "${LOCAL_CONF}" << 'SYSTEMDEOF'
 
 # systemd を init manager として使用
-DISTRO_FEATURES:append = " systemd"
+# usrmerge: systemd が udev を PROVIDES するために必須 (scarthgap以降)
+DISTRO_FEATURES:append = " systemd usrmerge"
 VIRTUAL-RUNTIME_init_manager = "systemd"
 VIRTUAL-RUNTIME_initscripts = ""
 SYSTEMDEOF
@@ -502,7 +503,7 @@ NETEOF
         cat >> "${LOCAL_CONF}" << 'SYSTEMDEOF'
 
 # systemd-networkd/resolved を EXTRA_PACKAGES で指定したため自動有効化
-DISTRO_FEATURES:append = " systemd"
+DISTRO_FEATURES:append = " systemd usrmerge"
 VIRTUAL-RUNTIME_init_manager = "systemd"
 VIRTUAL-RUNTIME_initscripts = ""
 SYSTEMDEOF
