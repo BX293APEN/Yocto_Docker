@@ -197,6 +197,13 @@ done
 # 3. パーティションテーブル作成 (GPT + EFI + rootfs)
 # ─────────────────────────────────────────────
 log "3. GPT パーティションテーブル作成"
+
+# 古いパーティション署名・ファイルシステム署名を完全に消去
+log "  wipefs: 古い署名を消去中..."
+wipefs -a "${TARGET_DEV}"
+sync
+udevadm settle --timeout=10 || true
+
 if [[ "${USB_SIZE_MB}" -gt 0 ]]; then
     ROOTFS_END="${USB_SIZE_MB}MiB"
 else
@@ -209,16 +216,26 @@ parted -s "${TARGET_DEV}" \
     set 1 esp on \
     mkpart primary ext4 "${EFI_SIZE_MB}MiB" "${ROOTFS_END}"
 
+# カーネルにパーティションテーブルの変更を通知して完全に認識させる
+sync
 partprobe "${TARGET_DEV}" 2>/dev/null || true
-sleep 1
+udevadm settle --timeout=30 || true
 
-# パーティションデバイス名の解決 (/dev/sdb1 or /dev/mmcblk0p1)
-PART1="${TARGET_DEV}1"
-PART2="${TARGET_DEV}2"
+# パーティションデバイス名の解決 (/dev/sdb1 or /dev/nvme0n1p1 or /dev/mmcblk0p1)
 if [[ "${TARGET_DEV}" =~ (nvme|mmcblk) ]]; then
     PART1="${TARGET_DEV}p1"
     PART2="${TARGET_DEV}p2"
+else
+    PART1="${TARGET_DEV}1"
+    PART2="${TARGET_DEV}2"
 fi
+
+# パーティションが実際に出現するまで最大10秒待つ
+log "  パーティション出現待ち: ${PART1} ${PART2}"
+for _i in $(seq 1 10); do
+    [[ -b "${PART1}" ]] && [[ -b "${PART2}" ]] && break
+    sleep 1
+done
 [[ -b "${PART1}" ]] || err "EFI パーティション ${PART1} が見つかりません"
 [[ -b "${PART2}" ]] || err "rootfs パーティション ${PART2} が見つかりません"
 
@@ -226,14 +243,21 @@ fi
 # 4. フォーマット
 # ─────────────────────────────────────────────
 log "4. パーティションフォーマット"
-mkfs.vfat -F 32 -n "EFI"    "${PART1}"
-mkfs.ext4 -L    "rootfs"    "${PART2}"
+
+# UUID を事前に固定してフォーマット（後からblkidで取得するより確実）
+ROOTFS_UUID="$(cat /proc/sys/kernel/random/uuid)"
+EFI_UUID="$(cat /proc/sys/kernel/random/uuid)"
+log "  固定UUID: ROOT=${ROOTFS_UUID} EFI=${EFI_UUID}"
+
+wipefs -a "${PART1}"
+wipefs -a "${PART2}"
+mkfs.vfat -F 32 -n "EFI"                    "${PART1}"
+mkfs.ext4 -F   -L "rootfs" -U "${ROOTFS_UUID}" "${PART2}"
 
 # フォーマット後にカーネルのデバイス認識と書き込みキャッシュを同期する
 sync
 udevadm settle --timeout=10 || true
-partprobe "${TARGET_DEV}" 2>/dev/null || true
-sleep 2
+sleep 1
 
 # ─────────────────────────────────────────────
 # 5. rootfs 展開
@@ -255,8 +279,19 @@ log "rootfs 展開完了"
 # 6. fstab 設定
 # ─────────────────────────────────────────────
 log "6. fstab 設定"
-ROOTFS_UUID=$(blkid -s UUID -o value "${PART2}")
-EFI_UUID=$(blkid -s UUID -o value "${PART1}")
+# UUID はフォーマット時に固定済みのためblkidで再取得不要
+# ただし念のため一致確認する
+_BLKID_ROOT=$(blkid -s UUID -o value "${PART2}" 2>/dev/null || true)
+if [[ -n "${_BLKID_ROOT}" ]] && [[ "${_BLKID_ROOT}" != "${ROOTFS_UUID}" ]]; then
+    warn "rootfs UUIDが一致しません (期待: ${ROOTFS_UUID} 実際: ${_BLKID_ROOT}) → blkidの値を使用"
+    ROOTFS_UUID="${_BLKID_ROOT}"
+fi
+_BLKID_EFI=$(blkid -s UUID -o value "${PART1}" 2>/dev/null || true)
+if [[ -n "${_BLKID_EFI}" ]] && [[ "${_BLKID_EFI}" != "${EFI_UUID}" ]]; then
+    warn "EFI UUIDが一致しません (期待: ${EFI_UUID} 実際: ${_BLKID_EFI}) → blkidの値を使用"
+    EFI_UUID="${_BLKID_EFI}"
+fi
+log "  確定UUID: ROOT=${ROOTFS_UUID} EFI=${EFI_UUID}"
 
 cat > "${MOUNT_ROOT}/etc/fstab" << FSTABEOF
 # <device>                                <mount>   <type>  <options>       <dump> <pass>
