@@ -396,8 +396,12 @@ SSHEOF
     # ハッシュをヒアドキュメント外の変数に保持し、sed でプレースホルダを置換する。
     # ハッシュには $ が含まれるため、ヒアドキュメントはシングルクォートで展開を抑止し
     # sed の区切り文字を | にして安全に埋め込む。
-    # sed区切り文字が | なので $ をエスケープするだけでよい
-    _ROOT_HASH_ESCAPED=$(printf '%s' "${_ROOT_HASH}" | sed 's/[$]/\\$/g')
+    #
+    # 【重要】BitBake は local.conf 内の $X を変数展開するため、
+    # $ を $$ にエスケープする必要がある。
+    # 例: $6$salt$hash → $$6$$salt$$hash → BitBake解釈後 → $6$salt$hash (正常)
+    # sed 's/[$]/\$\$/g' で各 $ を $$ に置換する。
+    _ROOT_HASH_ESCAPED=$(printf '%s' "${_ROOT_HASH}" | sed 's/[$]/\$\$/g')
     cat >> "${LOCAL_CONF}" << 'PASSEOF'
 
 # root パスワード設定 (extrausers.bbclass: ハッシュ済みパスワードを使用)
@@ -908,8 +912,13 @@ if [[ -f "${_ROOTFS_TAR}" && -n "${ROOT_PASSWORD}" ]]; then
     _CURRENT_HASH=$(tar -xOf "${_ROOTFS_TAR}" ./etc/shadow 2>/dev/null \
         | grep '^root:' | cut -d: -f2 || true)
 
-    if [[ "${_CURRENT_HASH}" == "*" || "${_CURRENT_HASH}" == "!" || -z "${_CURRENT_HASH}" ]]; then
-        warn "Stage-1 (extrausers) でパスワード未設定。Stage-2 フォールバックを実行します。"
+    # Stage-1 判定:
+    #   ・"*" / "!" → ロック状態
+    #   ・空文字     → 未設定
+    #   ・"$" で始まらない → BitBakeが $ を変数展開して壊れたハッシュ（今回の不具合パターン）
+    if [[ "${_CURRENT_HASH}" == "*" || "${_CURRENT_HASH}" == "!" \
+       || -z "${_CURRENT_HASH}" || "${_CURRENT_HASH}" != \$* ]]; then
+        warn "Stage-1 (extrausers) でパスワード未設定または不正なハッシュ(${_CURRENT_HASH:0:6}...)。Stage-2 フォールバックを実行します。"
 
         # Stage-2: openssl で SHA-512 ハッシュ生成 → tar.gz 展開→書き換え→再圧縮
         if command -v openssl &>/dev/null; then
