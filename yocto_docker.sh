@@ -301,6 +301,20 @@ _patch_local_conf() {
     echo "DEFAULT_TIMEZONE = \"${TIME_ZONE}\""      >> "${LOCAL_CONF}"
     echo "IMAGE_LINGUAS = \"en-us\""                >> "${LOCAL_CONF}"
 
+    # ── 日本語キーボード設定 ──────────────────────────────────────────────────
+    cat >> "${LOCAL_CONF}" << 'KBEOF'
+
+# 日本語キーボード (jp106) の設定
+# vconsole.conf 経由で systemd に反映される
+PACKAGECONFIG:append:pn-systemd = " vconsole"
+ROOTFS_POSTPROCESS_COMMAND:append = " set_jp_keyboard;"
+
+set_jp_keyboard() {
+    echo "KEYMAP=jp106" > ${IMAGE_ROOTFS}/etc/vconsole.conf
+    echo "FONT=Lat2-Terminus16" >> ${IMAGE_ROOTFS}/etc/vconsole.conf
+}
+KBEOF
+
     # ── ホスト GCC バージョン固定 ─────────────────────────────────────────────
     # Ubuntu 24.04 以降の GCC 14/15 は Yocto scarthgap の gcc-cross / re2c の
     # ビルドと互換性がなくリンクエラーになる。
@@ -393,7 +407,8 @@ SSHEOF
     # ハッシュをヒアドキュメント外の変数に保持し、sed でプレースホルダを置換する。
     # ハッシュには $ が含まれるため、ヒアドキュメントはシングルクォートで展開を抑止し
     # sed の区切り文字を | にして安全に埋め込む。
-    _ROOT_HASH_ESCAPED=$(printf '%s' "${_ROOT_HASH}" | sed 's|[|\\&]|\\&|g')
+    # sed区切り文字が | なので $ をエスケープするだけでよい
+    _ROOT_HASH_ESCAPED=$(printf '%s' "${_ROOT_HASH}" | sed 's/[$]/\\$/g')
     cat >> "${LOCAL_CONF}" << 'PASSEOF'
 
 # root パスワード設定 (extrausers.bbclass: ハッシュ済みパスワードを使用)
