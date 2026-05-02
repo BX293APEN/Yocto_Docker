@@ -628,7 +628,7 @@ _register_layer_to_bblayers() {
     fi
 
     log "bblayers.conf に ${layer_name}${subpath:+/$subpath} を追加します"
-    sed -i "s|\"$|  ${layer_path} \\\\\n\"|" "${BBLAYERS_CONF}"
+    sed -i "s|^  \"$|  ${layer_path} \\\\\n  \"|" "${BBLAYERS_CONF}"
 }
 
 # DEVICE_PROFILE 由来のレイヤーを登録
