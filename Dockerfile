@@ -28,7 +28,6 @@ RUN apt-get update && \
         unzip \
         texinfo \
         gcc-13 \
-        g++-13 \
         build-essential \
         chrpath \
         socat \
