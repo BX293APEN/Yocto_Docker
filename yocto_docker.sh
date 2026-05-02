@@ -384,13 +384,24 @@ SSHEOF
     # これを使うと平文パスワードを渡すだけで内部で自動的に安全なハッシュに変換してくれる。
     # 面倒な $ のエスケープやホスト側での openssl ハッシュ化は不要。
 
-    cat >> "${LOCAL_CONF}" << EOF
+    # -P (平文) は scarthgap の shadow-native で失敗するケースがあるため
+    # openssl でハッシュ化して -p (ハッシュ済み) で渡す
+    _ROOT_HASH=$(openssl passwd -6 "${ROOT_PASSWORD}" 2>/dev/null \
+        || openssl passwd -1 "${ROOT_PASSWORD}")
+    log "root パスワードハッシュ生成完了"
 
-# root パスワード設定 (Yocto 公式: extrausers.bbclass)
+    # ハッシュをヒアドキュメント外の変数に保持し、sed でプレースホルダを置換する。
+    # ハッシュには $ が含まれるため、ヒアドキュメントはシングルクォートで展開を抑止し
+    # sed の区切り文字を | にして安全に埋め込む。
+    _ROOT_HASH_ESCAPED=$(printf '%s' "${_ROOT_HASH}" | sed 's|[|\\&]|\\&|g')
+    cat >> "${LOCAL_CONF}" << 'PASSEOF'
+
+# root パスワード設定 (extrausers.bbclass: ハッシュ済みパスワードを使用)
 INHERIT += "extrausers"
-EXTRA_USERS_PARAMS = "usermod -P '${ROOT_PASSWORD}' root;"
-EOF
-    log "root パスワードを extrausers (-P オプション) 経由で設定しました"
+EXTRA_USERS_PARAMS = "usermod -p '__ROOT_HASH__' root;"
+PASSEOF
+    sed -i "s|__ROOT_HASH__|${_ROOT_HASH_ESCAPED}|" "${LOCAL_CONF}"
+    log "root パスワードを extrausers (-p ハッシュ) 経由で設定しました"
 
     # ── ネットワーク設定用 bbclass ────────────────────────────────────────────
     # configure_network() はシェル関数のため local.conf には直接書けない。
