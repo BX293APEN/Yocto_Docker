@@ -27,7 +27,8 @@ RUN apt-get update && \
         diffstat \
         unzip \
         texinfo \
-        gcc \
+        gcc-13 \
+        g++-13 \
         build-essential \
         chrpath \
         socat \
@@ -64,8 +65,6 @@ RUN apt-get update && \
         vim \
         tar \
         gzip \
-        gcc-13 \
-        g++-13 \
         bzip2 && \
     # ロケール設定
     locale-gen en_US.UTF-8 && \
