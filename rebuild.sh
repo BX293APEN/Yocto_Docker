@@ -10,4 +10,4 @@ rm -rf ./build/yocto-rootfs.tar.gz
 # poky を削除して再クローン（git fetch による意図しない更新を防ぐ）
 rm -rf ./build/poky
 
-echo 0 | sudo tee /proc/sys/kernel/apparmor_restrict_unprivileged_userns && docker compose up --build -d
+echo 0 | sudo tee /proc/sys/kernel/apparmor_restrict_unprivileged_userns && docker compose build --no-cache && docker compose up -d

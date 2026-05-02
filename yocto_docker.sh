@@ -304,24 +304,26 @@ _patch_local_conf() {
     # ── ホスト GCC バージョン固定 ─────────────────────────────────────────────
     # Ubuntu 24.04 以降の GCC 14/15 は Yocto scarthgap の gcc-cross / re2c の
     # ビルドと互換性がなくリンクエラーになる。
-    # BUILD_CC で明示的に gcc-13 を指定して回避する。
-    # gcc-13 が存在しない場合は自動検出した最も古い gcc にフォールバックする。
-    _BUILD_GCC="gcc"
+    # gcc-13 → gcc-12 → gcc-11 → gcc の順で存在するものを使う。
+    _BUILD_GCC=""
+    _BUILD_GXX=""
     for _V in 13 12 11; do
-        if command -v "gcc-${_V}" &>/dev/null; then
+        if command -v "gcc-${_V}" &>/dev/null && command -v "g++-${_V}" &>/dev/null; then
             _BUILD_GCC="gcc-${_V}"
+            _BUILD_GXX="g++-${_V}"
             break
         fi
     done
+    # バージョン付きが見つからない場合は素のgcc/g++を使う
+    if [[ -z "${_BUILD_GCC}" ]]; then
+        _BUILD_GCC="gcc"
+        _BUILD_GXX="g++"
+    fi
     log "BUILD_CC = ${_BUILD_GCC} ($(${_BUILD_GCC} --version | head -1))"
-    cat >> "${LOCAL_CONF}" << GCCEOF
-
-# ホスト GCC バージョン固定 (gcc-14/15 との互換性問題を回避)
-BUILD_CC = "${_BUILD_GCC}"
-BUILD_CXX = "${_BUILD_GCC/gcc/g++}"
-BUILD_CPP = "${_BUILD_GCC} -E"
-BUILD_CCLD = "${_BUILD_GCC}"
-GCCEOF
+    echo "BUILD_CC = \"${_BUILD_GCC}\""    >> "${LOCAL_CONF}"
+    echo "BUILD_CXX = \"${_BUILD_GXX}\""  >> "${LOCAL_CONF}"
+    echo "BUILD_CPP = \"${_BUILD_GCC} -E\""  >> "${LOCAL_CONF}"
+    echo "BUILD_CCLD = \"${_BUILD_GCC}\""  >> "${LOCAL_CONF}"
 
     # ── Docker 環境: BitBake user namespace サンドボックス無効化 ──────────────
     # Ubuntu 24.04 は unprivileged user namespace をカーネル + AppArmor の2段で制限する。
