@@ -301,19 +301,6 @@ _patch_local_conf() {
     echo "DEFAULT_TIMEZONE = \"${TIME_ZONE}\""      >> "${LOCAL_CONF}"
     echo "IMAGE_LINGUAS = \"en-us\""                >> "${LOCAL_CONF}"
 
-    # ── 日本語キーボード設定 ──────────────────────────────────────────────────
-    cat >> "${LOCAL_CONF}" << 'KBEOF'
-
-# 日本語キーボード (jp106) の設定
-# vconsole.conf 経由で systemd に反映される
-PACKAGECONFIG:append:pn-systemd = " vconsole"
-ROOTFS_POSTPROCESS_COMMAND:append = " set_jp_keyboard;"
-
-set_jp_keyboard() {
-    echo "KEYMAP=jp106" > ${IMAGE_ROOTFS}/etc/vconsole.conf
-    echo "FONT=Lat2-Terminus16" >> ${IMAGE_ROOTFS}/etc/vconsole.conf
-}
-KBEOF
 
     # ── ホスト GCC バージョン固定 ─────────────────────────────────────────────
     # Ubuntu 24.04 以降の GCC 14/15 は Yocto scarthgap の gcc-cross / re2c の
@@ -427,9 +414,24 @@ PASSEOF
     sudo mkdir -p "${BBCLASS_DIR}"
     sudo chmod 777 "${BBCLASS_DIR}"
 
-    # bbclass の初期化
+    # bbclass の初期化 (日本語キーボード設定を含む)
     cat > "${CUSTOM_BBCLASS}" << 'BBCLASSEOF'
-# yocto-docker-custom.bbclass — Docker ビルド時に自動生成 (ネットワーク設定用)
+# yocto-docker-custom.bbclass — Docker ビルド時に自動生成
+
+# 日本語キーボード (jp106) の設定
+python set_jp_keyboard() {
+    import os
+    rootfs = d.getVar('IMAGE_ROOTFS')
+    vconsole = os.path.join(rootfs, 'etc', 'vconsole.conf')
+    os.makedirs(os.path.dirname(vconsole), exist_ok=True)
+    with open(vconsole, 'w') as f:
+        f.write('KEYMAP=jp106
+')
+        f.write('FONT=Lat2-Terminus16
+')
+}
+
+ROOTFS_POSTPROCESS_COMMAND:append = " set_jp_keyboard;"
 BBCLASSEOF
 
     cat >> "${LOCAL_CONF}" << EOF
