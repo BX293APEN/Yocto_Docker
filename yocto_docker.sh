@@ -270,17 +270,17 @@ BUILD_DIR="/${WS}/build_yocto"
 sudo mkdir -p "${BUILD_DIR}"
 sudo chmod 777 "${BUILD_DIR}"
 
-# oe-init-build-env でビルド環境を初期化し、local.conf をクリーン生成する。
-#
-# 【設計方針】local.conf は毎回テンプレートから再生成して _patch_local_conf で上書きする。
-#   - 再実行時の重複追記を防ぎ、完全に冪等な状態を保つ。
-#   - sstate-cache / downloads はボリュームに残るのでビルドは高速に再開できる。
-#   - bblayers.conf は残す（レイヤー登録が消えないように）。
-log "local.conf を初期化します（oe-init-build-env）"
-cd "${POKY_DIR}"
-# local.conf だけ削除して oe-init-build-env に再生成させる
-# source はサブシェルでは効かないため bash -c で実行
+# ── ビルド設定ファイルのクリーンアップ ──────────────────────────────────
+# 毎回クリーン生成することで再実行時の重複追記・壊れた状態の持ち越しを防ぐ。
+# sstate-cache / downloads はボリュームに残るためビルドは高速に再開できる。
+log "ビルド設定ファイルをクリーンアップします"
 rm -f "${BUILD_DIR}/conf/local.conf"
+rm -f "${BUILD_DIR}/conf/bblayers.conf"
+rm -f "${BUILD_DIR}/classes/yocto-docker-custom.bbclass"
+
+# oe-init-build-env で local.conf / bblayers.conf をテンプレートから再生成する。
+# source はサブシェルでは効かないため bash -c で実行
+cd "${POKY_DIR}"
 bash -c "source oe-init-build-env ${BUILD_DIR}" || true
 
 # ─────────────────────────────────────────────
@@ -420,8 +420,6 @@ PASSEOF
     local CUSTOM_BBCLASS="${BBCLASS_DIR}/yocto-docker-custom.bbclass"
     sudo mkdir -p "${BBCLASS_DIR}"
     sudo chmod 777 "${BBCLASS_DIR}"
-    # local.conf と同様に毎回クリーンに再生成する（重複追記を防ぐ）
-    rm -f "${CUSTOM_BBCLASS}"
 
     # bbclass の初期化 (日本語キーボード設定を含む)
     cat > "${CUSTOM_BBCLASS}" << 'BBCLASSEOF'
@@ -781,7 +779,7 @@ _register_layer_to_bblayers() {
     # awk で BBLAYERS の閉じクォート行の直前にパスを挿入する。
     # sed と異なりインデントあり・なし両フォーマットに対応できる。
     awk -v layer="${layer_path}" '
-        /^[[:space:]]*"[[:space:]]*$/ { print "  " layer " \" }
+        /^[[:space:]]*"[[:space:]]*$/ { print "  " layer " \\" }
         { print }
     ' "${BBLAYERS_CONF}" > "${BBLAYERS_CONF}.tmp" && mv "${BBLAYERS_CONF}.tmp" "${BBLAYERS_CONF}"
 }
