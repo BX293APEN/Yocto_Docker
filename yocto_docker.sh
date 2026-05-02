@@ -173,12 +173,15 @@ step "1. poky クローン"
 POKY_DIR="/${WS}/poky"
 
 if [[ -d "${POKY_DIR}/.git" ]]; then
-    log "poky が既に存在します。fetch してブランチを確認します。"
+    log "poky が既に存在します。fetch せずそのまま使用します（再クローンしたい場合は poky/ を削除してください）。"
     cd "${POKY_DIR}"
-    git fetch origin
-    git checkout "${YOCTO_RELEASE}" 2>/dev/null || \
-        git checkout "origin/${YOCTO_RELEASE}" -b "${YOCTO_RELEASE}" || \
-        warn "ブランチ ${YOCTO_RELEASE} が見つかりません。現在のブランチを使用します。"
+    CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
+    if [[ "${CURRENT_BRANCH}" != "${YOCTO_RELEASE}" ]]; then
+        warn "現在のブランチ(${CURRENT_BRANCH})が YOCTO_RELEASE(${YOCTO_RELEASE})と異なります。"
+        warn "再クローンしたい場合: rm -rf ${POKY_DIR} してから再実行してください。"
+    else
+        log "ブランチ確認OK: ${CURRENT_BRANCH}"
+    fi
 else
     log "poky を clone します (branch: ${YOCTO_RELEASE})"
     git clone --depth 1 \
