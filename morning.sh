@@ -229,6 +229,12 @@ log "4. パーティションフォーマット"
 mkfs.vfat -F 32 -n "EFI"    "${PART1}"
 mkfs.ext4 -L    "rootfs"    "${PART2}"
 
+# フォーマット後にカーネルのデバイス認識と書き込みキャッシュを同期する
+sync
+udevadm settle --timeout=10 || true
+partprobe "${TARGET_DEV}" 2>/dev/null || true
+sleep 2
+
 # ─────────────────────────────────────────────
 # 5. rootfs 展開
 # ─────────────────────────────────────────────
