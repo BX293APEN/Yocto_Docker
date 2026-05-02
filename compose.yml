@@ -61,6 +61,8 @@ services:
       - SSH_PORT=${SSH_PORT}
       # ── 認証 ──
       - ROOT_PASSWORD=${ROOT_PASSWORD}
+      # ── NICドライバ ──
+      - NIC_DRIVERS=${NIC_DRIVERS}
       # ── systemd ──
       - USE_SYSTEMD=${USE_SYSTEMD}
       # ── ソースミラー ──
