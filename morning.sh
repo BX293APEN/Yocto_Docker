@@ -250,8 +250,9 @@ sleep 1
 # ─────────────────────────────────────────────
 log "5. rootfs 展開中 (時間がかかります)"
 mkdir -p "${MOUNT_ROOT}"
-chmod 777 "${MOUNT_ROOT}"
 mount "${PART2}" "${MOUNT_ROOT}"
+# マウント後にext4ルートのパーミッションを設定する（マウント前のchmodは無意味）
+chmod 755 "${MOUNT_ROOT}"
 mkdir -p "${MOUNT_ROOT}/boot/efi"
 mount "${PART1}" "${MOUNT_ROOT}/boot/efi"
 
