@@ -425,10 +425,8 @@ python set_jp_keyboard() {
     vconsole = os.path.join(rootfs, 'etc', 'vconsole.conf')
     os.makedirs(os.path.dirname(vconsole), exist_ok=True)
     with open(vconsole, 'w') as f:
-        f.write('KEYMAP=jp106
-')
-        f.write('FONT=Lat2-Terminus16
-')
+        f.write('KEYMAP=jp106\n')
+        f.write('FONT=Lat2-Terminus16\n')
 }
 
 ROOTFS_POSTPROCESS_COMMAND:append = " set_jp_keyboard;"
