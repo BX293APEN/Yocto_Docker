@@ -198,12 +198,6 @@ done
 # ─────────────────────────────────────────────
 log "3. GPT パーティションテーブル作成"
 
-# 古いパーティション署名・ファイルシステム署名を完全に消去
-log "  wipefs: 古い署名を消去中..."
-wipefs -a "${TARGET_DEV}"
-sync
-udevadm settle --timeout=10 || true
-
 if [[ "${USB_SIZE_MB}" -gt 0 ]]; then
     ROOTFS_END="${USB_SIZE_MB}MiB"
 else
@@ -243,16 +237,8 @@ done
 # 4. フォーマット
 # ─────────────────────────────────────────────
 log "4. パーティションフォーマット"
-
-# UUID を事前に固定してフォーマット（後からblkidで取得するより確実）
-ROOTFS_UUID="$(cat /proc/sys/kernel/random/uuid)"
-EFI_UUID="$(cat /proc/sys/kernel/random/uuid)"
-log "  固定UUID: ROOT=${ROOTFS_UUID} EFI=${EFI_UUID}"
-
-wipefs -a "${PART1}"
-wipefs -a "${PART2}"
-mkfs.vfat -F 32 -n "EFI"                    "${PART1}"
-mkfs.ext4 -F   -L "rootfs" -U "${ROOTFS_UUID}" "${PART2}"
+mkfs.vfat -F 32 -n "EFI"    "${PART1}"
+mkfs.ext4 -F   -L "rootfs"  "${PART2}"
 
 # フォーマット後にカーネルのデバイス認識と書き込みキャッシュを同期する
 sync
@@ -279,19 +265,9 @@ log "rootfs 展開完了"
 # 6. fstab 設定
 # ─────────────────────────────────────────────
 log "6. fstab 設定"
-# UUID はフォーマット時に固定済みのためblkidで再取得不要
-# ただし念のため一致確認する
-_BLKID_ROOT=$(blkid -s UUID -o value "${PART2}" 2>/dev/null || true)
-if [[ -n "${_BLKID_ROOT}" ]] && [[ "${_BLKID_ROOT}" != "${ROOTFS_UUID}" ]]; then
-    warn "rootfs UUIDが一致しません (期待: ${ROOTFS_UUID} 実際: ${_BLKID_ROOT}) → blkidの値を使用"
-    ROOTFS_UUID="${_BLKID_ROOT}"
-fi
-_BLKID_EFI=$(blkid -s UUID -o value "${PART1}" 2>/dev/null || true)
-if [[ -n "${_BLKID_EFI}" ]] && [[ "${_BLKID_EFI}" != "${EFI_UUID}" ]]; then
-    warn "EFI UUIDが一致しません (期待: ${EFI_UUID} 実際: ${_BLKID_EFI}) → blkidの値を使用"
-    EFI_UUID="${_BLKID_EFI}"
-fi
-log "  確定UUID: ROOT=${ROOTFS_UUID} EFI=${EFI_UUID}"
+ROOTFS_UUID=$(blkid -s UUID -o value "${PART2}")
+EFI_UUID=$(blkid -s UUID -o value "${PART1}")
+log "  UUID: ROOT=${ROOTFS_UUID} EFI=${EFI_UUID}"
 
 cat > "${MOUNT_ROOT}/etc/fstab" << FSTABEOF
 # <device>                                <mount>   <type>  <options>       <dump> <pass>
