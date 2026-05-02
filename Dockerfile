@@ -27,7 +27,8 @@ RUN apt-get update && \
         diffstat \
         unzip \
         texinfo \
-        gcc \
+        gcc-13 \
+        g++-13 \
         build-essential \
         chrpath \
         socat \
