@@ -27,8 +27,8 @@ RUN apt-get update && \
         diffstat \
         unzip \
         texinfo \
-        gcc \
-        g++ \
+        gcc-13 \
+        g++-13 \
         build-essential \
         chrpath \
         socat \
@@ -66,6 +66,10 @@ RUN apt-get update && \
         tar \
         gzip \
         bzip2 && \
+    # GCC 13 をデフォルトに設定 (GCC 14/15との互換性問題を回避)
+    update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 100 && \
+    update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-13 100 && \
+    update-alternatives --install /usr/bin/cc cc /usr/bin/gcc-13 100 && \
     # ロケール設定
     locale-gen en_US.UTF-8 && \
     update-locale LANG=en_US.UTF-8 && \

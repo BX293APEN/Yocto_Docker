@@ -301,6 +301,28 @@ _patch_local_conf() {
     echo "DEFAULT_TIMEZONE = \"${TIME_ZONE}\""      >> "${LOCAL_CONF}"
     echo "IMAGE_LINGUAS = \"en-us\""                >> "${LOCAL_CONF}"
 
+    # ── ホスト GCC バージョン固定 ─────────────────────────────────────────────
+    # Ubuntu 24.04 以降の GCC 14/15 は Yocto scarthgap の gcc-cross / re2c の
+    # ビルドと互換性がなくリンクエラーになる。
+    # BUILD_CC で明示的に gcc-13 を指定して回避する。
+    # gcc-13 が存在しない場合は自動検出した最も古い gcc にフォールバックする。
+    _BUILD_GCC="gcc"
+    for _V in 13 12 11; do
+        if command -v "gcc-${_V}" &>/dev/null; then
+            _BUILD_GCC="gcc-${_V}"
+            break
+        fi
+    done
+    log "BUILD_CC = ${_BUILD_GCC} ($(${_BUILD_GCC} --version | head -1))"
+    cat >> "${LOCAL_CONF}" << GCCEOF
+
+# ホスト GCC バージョン固定 (gcc-14/15 との互換性問題を回避)
+BUILD_CC = "${_BUILD_GCC}"
+BUILD_CXX = "${_BUILD_GCC/gcc/g++}"
+BUILD_CPP = "${_BUILD_GCC} -E"
+BUILD_CCLD = "${_BUILD_GCC}"
+GCCEOF
+
     # ── Docker 環境: BitBake user namespace サンドボックス無効化 ──────────────
     # Ubuntu 24.04 は unprivileged user namespace をカーネル + AppArmor の2段で制限する。
     # BitBake (Scarthgap/5.0+) はタスク実行時と起動時チェックの両方で user namespace を使う。
