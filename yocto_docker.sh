@@ -345,9 +345,11 @@ _patch_local_conf() {
     cat >> "${LOCAL_CONF}" << 'SANDBOXEOF'
 
 # Docker コンテナ内での user namespace 制限による PermissionError 回避
-# (BitBake のネットワークサンドボックス機能を無効化 — Yocto イメージのNW動作には無影響)
+# (BitBake のネットワーク/タスクサンドボックス機能を無効化 — Yocto イメージのNW動作には無影響)
 BB_TASK_NETWORK = "1"
-# ↑ Scarthgap (5.0) 以降で有効。Kirkstone 以前に戻す場合はコメントアウト可。
+# scarthgap 5.0.13以降はBB_TASK_NETWORKだけでは不十分なため
+# BB_TASK_ISOLATIONも無効化してuser namespaceの使用を完全に抑止する
+BB_TASK_ISOLATION = "none"
 SANDBOXEOF
     log "BitBake ネットワークサンドボックスを無効化しました (BB_TASK_NETWORK)"
 
@@ -413,20 +415,16 @@ PASSEOF
     local CUSTOM_BBCLASS="${BBCLASS_DIR}/yocto-docker-custom.bbclass"
     sudo mkdir -p "${BBCLASS_DIR}"
     sudo chmod 777 "${BBCLASS_DIR}"
+    # local.conf と同様に毎回クリーンに再生成する（重複追記を防ぐ）
+    rm -f "${CUSTOM_BBCLASS}"
 
     # bbclass の初期化 (日本語キーボード設定を含む)
     cat > "${CUSTOM_BBCLASS}" << 'BBCLASSEOF'
 # yocto-docker-custom.bbclass — Docker ビルド時に自動生成
 
 # 日本語キーボード (jp106) の設定
-python set_jp_keyboard() {
-    import os
-    rootfs = d.getVar('IMAGE_ROOTFS')
-    vconsole = os.path.join(rootfs, 'etc', 'vconsole.conf')
-    os.makedirs(os.path.dirname(vconsole), exist_ok=True)
-    with open(vconsole, 'w') as f:
-        f.write('KEYMAP=jp106\n')
-        f.write('FONT=Lat2-Terminus16\n')
+set_jp_keyboard() {
+    printf 'KEYMAP=jp106\nFONT=Lat2-Terminus16\n' > ${IMAGE_ROOTFS}/etc/vconsole.conf
 }
 
 ROOTFS_POSTPROCESS_COMMAND:append = " set_jp_keyboard;"
