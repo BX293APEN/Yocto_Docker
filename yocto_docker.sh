@@ -728,12 +728,14 @@ LAYEREOF
         fi
 
         # bblayers.conf に BUILD_DIR を追加（重複チェック付き）
-        # BBLAYERS の値リストは末尾が '  "' で終わる形式のため、
-        # その行の直前にパスを挿入する。
-        # NG 例: BBLAYERS ?= " の行を置換 → パスが BBLAYERS 定義の外に出てしまう
+        # awk で BBLAYERS の閉じクォート行の直前にパスを挿入する。
+        # sed と異なりインデントあり・なし両フォーマットに対応できる。
         if ! grep -q "${BUILD_DIR}" "${BUILD_DIR}/conf/bblayers.conf" 2>/dev/null; then
-            sed -i "s|^  \"$|  ${BUILD_DIR} \\\\\n  \"|" \
-                "${BUILD_DIR}/conf/bblayers.conf" || true
+            awk -v layer="${BUILD_DIR}" '
+                /^[[:space:]]*"[[:space:]]*$/ { print "  " layer " \\" }
+                { print }
+            ' "${BUILD_DIR}/conf/bblayers.conf" > "${BUILD_DIR}/conf/bblayers.conf.tmp" \
+                && mv "${BUILD_DIR}/conf/bblayers.conf.tmp" "${BUILD_DIR}/conf/bblayers.conf"
         fi
 
         log "NICドライバcfgフラグメント生成完了: ${_nic_cfg_dir}/nic-drivers.cfg"
@@ -776,7 +778,12 @@ _register_layer_to_bblayers() {
     fi
 
     log "bblayers.conf に ${layer_name}${subpath:+/$subpath} を追加します"
-    sed -i "s|^  \"$|  ${layer_path} \\\\\n  \"|" "${BBLAYERS_CONF}"
+    # awk で BBLAYERS の閉じクォート行の直前にパスを挿入する。
+    # sed と異なりインデントあり・なし両フォーマットに対応できる。
+    awk -v layer="${layer_path}" '
+        /^[[:space:]]*"[[:space:]]*$/ { print "  " layer " \" }
+        { print }
+    ' "${BBLAYERS_CONF}" > "${BBLAYERS_CONF}.tmp" && mv "${BBLAYERS_CONF}.tmp" "${BBLAYERS_CONF}"
 }
 
 # DEVICE_PROFILE 由来のレイヤーを登録
