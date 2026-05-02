@@ -23,6 +23,7 @@ set -eo pipefail
 
 # ── ビルド設定 ──
 YOCTO_RELEASE="${YOCTO_RELEASE:-scarthgap}"
+YOCTO_RELEASE_VERSION="${YOCTO_RELEASE_VERSION:-5.0.13}"
 DEVICE_PROFILE="${DEVICE_PROFILE:-x86_64}"
 CPU_CORE="${CPU_CORE:-4}"
 WS="${WS:-build}"
@@ -183,11 +184,22 @@ if [[ -d "${POKY_DIR}/.git" ]]; then
         log "ブランチ確認OK: ${CURRENT_BRANCH}"
     fi
 else
-    log "poky を clone します (branch: ${YOCTO_RELEASE})"
+    # ブランチ名ではなくポイントリリースタグで固定する
+    # scarthgap ブランチは現在も更新が続いており、最新コミットには
+    # openssl 3.5.5 等の新しすぎるレシピが含まれビルドが壊れるため。
+    _POKY_TAG="yocto-${YOCTO_RELEASE_VERSION:-5.0.13}"
+    log "poky を clone します (tag: ${_POKY_TAG})"
     git clone --depth 1 \
-        --branch "${YOCTO_RELEASE}" \
+        --branch "${_POKY_TAG}" \
         https://git.yoctoproject.org/poky \
-        "${POKY_DIR}"
+        "${POKY_DIR}" || {
+        # タグが存在しない場合はブランチにフォールバック
+        warn "タグ ${_POKY_TAG} が見つかりません。ブランチ ${YOCTO_RELEASE} でクローンします。"
+        git clone --depth 1 \
+            --branch "${YOCTO_RELEASE}" \
+            https://git.yoctoproject.org/poky \
+            "${POKY_DIR}"
+    }
 fi
 
 # ─────────────────────────────────────────────

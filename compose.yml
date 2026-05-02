@@ -38,6 +38,7 @@ services:
     environment:
       # ── ビルド設定 ──
       - YOCTO_RELEASE=${YOCTO_RELEASE}
+      - YOCTO_RELEASE_VERSION=${YOCTO_RELEASE_VERSION:-5.0.13}
       - DEVICE_PROFILE=${DEVICE_PROFILE}
       - MACHINE=${MACHINE}
       - IMAGE=${IMAGE}
