@@ -315,7 +315,7 @@ SANDBOXEOF
         cat >> "${LOCAL_CONF}" << 'GRUBEOF'
 
 # x86_64: grub-mkconfig 実行のため grub / grub-efi を組み込む
-IMAGE_INSTALL:append = " grub grub-efi grub-efi-x86-64"
+IMAGE_INSTALL:append = " grub grub-efi"
 GRUBEOF
         log "x86_64: grub / grub-efi を IMAGE_INSTALL に追加しました"
     fi
