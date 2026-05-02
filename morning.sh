@@ -274,6 +274,9 @@ if [[ "${DEVICE_PROFILE}" == "x86_64" ]]; then
     mount --make-rslave       "${MOUNT_ROOT}/sys"
     mount --rbind      /dev   "${MOUNT_ROOT}/dev"
     mount --make-rslave       "${MOUNT_ROOT}/dev"
+    # systemd環境では /etc/resolv.conf がdangling symlinkになっているため
+    # シンボリックリンクを削除してから実ファイルとしてコピーする
+    rm -f "${MOUNT_ROOT}/etc/resolv.conf"
     cp /etc/resolv.conf "${MOUNT_ROOT}/etc/resolv.conf"
 
     # cleanup トラップを更新（bind マウントも確実に解除）
