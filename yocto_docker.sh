@@ -316,10 +316,13 @@ _patch_local_conf() {
     done
     # バージョン付きが見つからない場合は素のgcc/g++を使う
     if [[ -z "${_BUILD_GCC}" ]]; then
-        _BUILD_GCC="gcc"
-        _BUILD_GXX="g++"
+        _BUILD_GCC=$(which gcc 2>/dev/null || echo "gcc")
+        _BUILD_GXX=$(which g++ 2>/dev/null || echo "g++")
     fi
-    log "BUILD_CC = ${_BUILD_GCC} ($(${_BUILD_GCC} --version | head -1))"
+    # フルパスに変換して確実に存在するものを使う
+    _BUILD_GCC=$(which "${_BUILD_GCC}" 2>/dev/null || which gcc)
+    _BUILD_GXX=$(which "${_BUILD_GXX}" 2>/dev/null || which g++)
+    log "BUILD_CC = ${_BUILD_GCC} ($(${_BUILD_GCC} --version 2>/dev/null | head -1 || echo "version unknown"))"
     echo "BUILD_CC = \"${_BUILD_GCC}\""    >> "${LOCAL_CONF}"
     echo "BUILD_CXX = \"${_BUILD_GXX}\""  >> "${LOCAL_CONF}"
     echo "BUILD_CPP = \"${_BUILD_GCC} -E\""  >> "${LOCAL_CONF}"
